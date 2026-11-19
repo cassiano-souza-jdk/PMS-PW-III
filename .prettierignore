@@ -1,0 +1,11 @@
+PMS_Documentacao/
+.agents/
+reports/
+README.md
+AGENTS.md
+dist/
+pnpm-lock.yaml
+coverage/
+playwright-report/
+test-results/
+*.tsbuildinfo
