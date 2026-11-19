@@ -125,6 +125,7 @@ export interface TaskPause extends OrganizationScoped {
 
 export interface TaskExecutionCycle extends OrganizationScoped {
   readonly id: TaskExecutionCycleId;
+  readonly projectId: ProjectId;
   readonly taskId: TaskId;
   readonly cycleNumber: number;
   readonly startedAt: IsoDateTime;

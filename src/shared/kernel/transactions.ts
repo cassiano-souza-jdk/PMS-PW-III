@@ -27,6 +27,7 @@ export const TRANSACTION_RESOURCES = {
   TASK_EXECUTION_CYCLES: 'taskExecutionCycles',
   TASK_COMMENTS: 'taskComments',
   TASK_ATTACHMENTS: 'taskAttachments',
+  TASK_DEADLINE_HISTORY: 'taskDeadlineHistory',
   TAGS: 'tags',
   FOCUS_PREFERENCES: 'focusPreferences',
   BOTTLENECK_ALERTS: 'bottleneckAlerts',
