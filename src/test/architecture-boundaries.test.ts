@@ -21,14 +21,31 @@ async function lintSnippet(code: string, relativeFilePath: string) {
   return result.messages;
 }
 
-describe('Architecture boundaries and lint enforcement (ADR-0005 §5)', () => {
+describe('Architecture boundaries and lint enforcement (ADR-0005 §5 & ADR-0006 §6)', () => {
   beforeAll(async () => {
     await mkdir(path.join(TMP_ALPHA_DIR, 'infrastructure'), { recursive: true });
+    await mkdir(path.join(TMP_ALPHA_DIR, 'presentation'), { recursive: true });
+    await mkdir(path.join(TMP_ALPHA_DIR, 'domain'), { recursive: true });
     await mkdir(path.join(TMP_BETA_DIR, 'domain'), { recursive: true });
 
     await writeFile(
       path.join(TMP_ALPHA_DIR, 'infrastructure', 'sample-repository.ts'),
       'export const sampleRepository = true;\n',
+      'utf8',
+    );
+    await writeFile(
+      path.join(TMP_ALPHA_DIR, 'presentation', 'sample-view.ts'),
+      'export const sampleView = true;\n',
+      'utf8',
+    );
+    await writeFile(
+      path.join(TMP_ALPHA_DIR, 'domain', 'cycle-a.ts'),
+      "import { cycleB } from './cycle-b';\nexport const cycleA = (): string => cycleB();\n",
+      'utf8',
+    );
+    await writeFile(
+      path.join(TMP_ALPHA_DIR, 'domain', 'cycle-b.ts'),
+      "import { cycleA } from './cycle-a';\nexport const cycleB = (): string => cycleA();\n",
       'utf8',
     );
     await writeFile(
@@ -65,6 +82,24 @@ describe('Architecture boundaries and lint enforcement (ADR-0005 §5)', () => {
       (msg) => msg.ruleId === 'no-restricted-imports' && msg.severity === 2,
     );
     expect(restrictedErrors).toHaveLength(3);
+  });
+
+  it('blocks zod inside src/shared/kernel/ and src/modules/*/domain/ (ADR-0006 §6)', async () => {
+    const kernelMessages = await lintSnippet(
+      ["import { z } from 'zod';", 'export const forbiddenKernelSchema = z.string();'].join('\n'),
+      'src/shared/kernel/violation-zod.ts',
+    );
+    const domainMessages = await lintSnippet(
+      ["import { z } from 'zod';", 'export const forbiddenDomainSchema = z.string();'].join('\n'),
+      `src/modules/${TMP_ALPHA_MODULE}/domain/violation-zod.ts`,
+    );
+
+    expect(
+      kernelMessages.filter((msg) => msg.ruleId === 'no-restricted-imports' && msg.severity === 2),
+    ).toHaveLength(1);
+    expect(
+      domainMessages.filter((msg) => msg.ruleId === 'no-restricted-imports' && msg.severity === 2),
+    ).toHaveLength(1);
   });
 
   it('blocks react-intl inside shared-kernel (src/shared/errors/)', async () => {
@@ -111,6 +146,60 @@ describe('Architecture boundaries and lint enforcement (ADR-0005 §5)', () => {
       (msg) => msg.ruleId === 'boundaries/dependencies' && msg.severity === 2,
     );
     expect(boundaryErrors).toHaveLength(2);
+  });
+
+  it('blocks module-public-api (src/modules/*/index.ts) from importing module-presentation or shared-ui (ADR-0006 §6)', async () => {
+    const messages = await lintSnippet(
+      [
+        `import { sampleView } from '@/modules/${TMP_ALPHA_MODULE}/presentation/sample-view';`,
+        "import { cn } from '@/shared/ui/cn';",
+        'export const forbiddenPublicApiExports = [sampleView, cn];',
+      ].join('\n'),
+      `src/modules/${TMP_ALPHA_MODULE}/index.ts`,
+    );
+
+    const boundaryErrors = messages.filter(
+      (msg) => msg.ruleId === 'boundaries/dependencies' && msg.severity === 2,
+    );
+    expect(boundaryErrors).toHaveLength(2);
+  });
+
+  it('blocks leaf module src/modules/authorization/** from importing any other module in src/modules/* (ADR-0006 §6)', async () => {
+    const domainMessages = await lintSnippet(
+      [
+        `import { betaPublicContract } from '@/modules/${TMP_BETA_MODULE}';`,
+        'export const forbiddenAuthzDomainImport = betaPublicContract;',
+      ].join('\n'),
+      'src/modules/authorization/domain/violation-cross-module.ts',
+    );
+    const appMessages = await lintSnippet(
+      [
+        "import { SUBTASK_STATUSES } from '@/modules/tasks';",
+        'export const forbiddenAuthzAppImport = SUBTASK_STATUSES;',
+      ].join('\n'),
+      'src/modules/authorization/application/violation-cross-module.ts',
+    );
+
+    expect(
+      domainMessages.filter(
+        (msg) => msg.ruleId === 'boundaries/dependencies' && msg.severity === 2,
+      ),
+    ).toHaveLength(1);
+    expect(
+      appMessages.filter((msg) => msg.ruleId === 'boundaries/dependencies' && msg.severity === 2),
+    ).toHaveLength(1);
+  });
+
+  it('blocks circular dependencies between real files (import-x/no-cycle)', async () => {
+    const [result] = await eslint.lintFiles([path.join(TMP_ALPHA_DIR, 'domain', 'cycle-a.ts')]);
+    if (!result) {
+      throw new Error('ESLint returned no result for cycle-a.ts');
+    }
+
+    const cycleErrors = result.messages.filter(
+      (msg) => msg.ruleId === 'import-x/no-cycle' && msg.severity === 2,
+    );
+    expect(cycleErrors.length).toBeGreaterThanOrEqual(1);
   });
 
   it('blocks app-shell from importing module-infrastructure directly (boundaries/dependencies)', async () => {
