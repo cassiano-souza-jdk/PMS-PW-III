@@ -326,6 +326,10 @@ export default tseslint.config(
       'react-hooks': reactHooks,
     },
     settings: {
+      'import-x/extensions': ['.ts', '.tsx', '.mts', '.cts', '.js', '.jsx'],
+      'import-x/parsers': {
+        '@typescript-eslint/parser': ['.ts', '.tsx', '.mts', '.cts'],
+      },
       'import-x/resolver-next': [
         createTypeScriptImportResolver({
           alwaysTryTypes: true,
