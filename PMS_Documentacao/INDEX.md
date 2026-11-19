@@ -1,6 +1,6 @@
 # Índice do pacote PMS
 
-Total de arquivos Markdown: 34
+Total de arquivos Markdown: 35
 
 -   `ACCESSIBILITY.md`
 -   `ADR/ADR-0001-modular-layered-architecture.md`
@@ -32,6 +32,7 @@ Total de arquivos Markdown: 34
 -   `SECURITY.md`
 -   `TASK-TEMPLATE.md`
 -   `TESTING.md`
+-   `docs/contracts/api-endpoints.md`
 -   `docs/contracts/event-envelope.md`
 -   `docs/contracts/metric-definitions.md`
 -   `docs/contracts/permission-matrix.md`
