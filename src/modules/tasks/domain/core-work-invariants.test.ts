@@ -523,6 +523,7 @@ describe('Tasks & Impediments — Completion, Pauses, Reopen Cycles & Attachment
     const cycle1: TaskExecutionCycle = {
       id: CYCLE_1,
       organizationId: ORG_A,
+      projectId: PROJECT_1,
       taskId: TASK_A,
       cycleNumber: 1,
       startedAt: T0,
@@ -581,6 +582,9 @@ describe('Tasks & Impediments — Completion, Pauses, Reopen Cycles & Attachment
     const cycle2 = assertTaskReopenCreatesNewCycle([cycle1], T5, CYCLE_2, 'Regression found');
     expect(cycle2).toMatchObject({
       id: CYCLE_2,
+      organizationId: ORG_A,
+      projectId: PROJECT_1,
+      taskId: TASK_A,
       cycleNumber: 2,
       reopenedFromCycleId: CYCLE_1,
       reopenReason: 'Regression found',

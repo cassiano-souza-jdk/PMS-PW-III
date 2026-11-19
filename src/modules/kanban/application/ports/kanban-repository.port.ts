@@ -18,6 +18,6 @@ export interface BoardColumnRepositoryPort {
     options?: { readonly includeArchived?: boolean },
   ): Promise<readonly BoardColumn[]>;
   save(column: BoardColumn): Promise<void>;
-  saveMany(columns: readonly BoardColumn[]): Promise<void>;
+  saveMany(organizationId: OrganizationId, columns: readonly BoardColumn[]): Promise<void>;
   delete(organizationId: OrganizationId, columnId: BoardColumnId): Promise<void>;
 }

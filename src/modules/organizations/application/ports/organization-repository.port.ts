@@ -14,6 +14,10 @@ export interface OrganizationMemberRepositoryPort {
     userId: UserId,
   ): Promise<OrganizationMember | null>;
   listByOrganization(organizationId: OrganizationId): Promise<readonly OrganizationMember[]>;
+  /**
+   * Restricted exclusively to resolving the authenticated actor's own organization memberships
+   * (e.g., organization selector and session context bootstrap — PRD.md §5).
+   */
   listByUser(userId: UserId): Promise<readonly OrganizationMember[]>;
   save(member: OrganizationMember): Promise<void>;
 }

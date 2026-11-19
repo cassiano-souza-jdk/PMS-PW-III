@@ -253,6 +253,7 @@ export function assertTaskReopenCreatesNewCycle(
   return Object.freeze({
     id: newCycleId,
     organizationId: latestCycle.organizationId,
+    projectId: latestCycle.projectId,
     taskId: latestCycle.taskId,
     cycleNumber: latestCycle.cycleNumber + 1,
     startedAt: now,
