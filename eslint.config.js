@@ -60,7 +60,12 @@ const BOUNDARIES_ELEMENTS = [
   },
   {
     type: 'shared-infra',
-    pattern: ['src/shared/config/**', 'src/shared/logging/**'],
+    pattern: [
+      'src/shared/config/**',
+      'src/shared/logging/**',
+      'src/shared/persistence/**',
+      'src/shared/http/**',
+    ],
     mode: 'full',
   },
   {
@@ -479,12 +484,14 @@ export default tseslint.config(
     },
   },
 
-  // Camada 2: Bloqueio de Dexie e MSW na Apresentação, Layout, Router e Shared UI (ADR-0005 §5)
+  // Camada 2: Bloqueio de Dexie e MSW na Apresentação, Layout, Router, Providers, App.tsx e Shared UI (ADR-0005 §5 & ADR-0007 §2)
   {
     files: [
       'src/modules/*/presentation/**/*.{ts,tsx}',
       'src/app/layout/**/*.{ts,tsx}',
       'src/app/router/**/*.{ts,tsx}',
+      'src/app/providers/**/*.{ts,tsx}',
+      'src/app/App.tsx',
       'src/shared/ui/**/*.{ts,tsx}',
     ],
     rules: {
