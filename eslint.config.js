@@ -153,19 +153,52 @@ const BOUNDARIES_POLICIES = [
       { to: { element: { type: ['shared-kernel', 'shared-ui'] } } },
     ],
   },
-  // module-public-api (src/modules/<module>/index.ts): expõe contratos de domain/application/presentation do mesmo módulo
+  // module-public-api (src/modules/<module>/index.ts): expõe apenas contratos de domain/application do mesmo módulo e shared-kernel (ADR-0006)
   {
     from: { element: { type: 'module-public-api' } },
     allow: [
       {
         to: {
           element: {
-            type: ['module-domain', 'module-application', 'module-presentation'],
+            type: ['module-domain', 'module-application'],
             captured: SAME_MODULE,
           },
         },
       },
-      { to: { element: { type: ['shared-kernel', 'shared-ui'] } } },
+      { to: { element: { type: 'shared-kernel' } } },
+    ],
+  },
+  // Módulo-folha (ADR-0006): src/modules/authorization/** não pode importar nenhum outro módulo em src/modules/*
+  {
+    from: {
+      element: {
+        type: [
+          'module-domain',
+          'module-application',
+          'module-infrastructure',
+          'module-presentation',
+          'module-public-api',
+        ],
+        captured: { module: 'authorization' },
+      },
+    },
+    disallow: [
+      {
+        to: {
+          element: {
+            type: [
+              'module-domain',
+              'module-application',
+              'module-infrastructure',
+              'module-presentation',
+              'module-public-api',
+            ],
+            captured: OTHER_MODULE,
+          },
+        },
+        message:
+          'O módulo-folha authorization não pode importar outros módulos em src/modules/* (ADR-0006).',
+      },
     ],
   },
   // app-shell: app-shell, app-composition, module-presentation, module-public-api e shared-* (proibido module-infrastructure)
@@ -400,6 +433,11 @@ export default tseslint.config(
               name: '@tabler/icons-react',
               message: 'Domínio e Shared Kernel não podem depender de bibliotecas de ícones.',
             },
+            {
+              name: 'zod',
+              message:
+                'Domínio e Shared Kernel devem permanecer 100% puros e independentes de Zod (validação de entrada pertence a application/shared-infra).',
+            },
           ],
           patterns: [
             {
@@ -425,6 +463,11 @@ export default tseslint.config(
             {
               group: ['@tabler/icons-react/*'],
               message: 'Domínio e Shared Kernel não podem depender de Tabler Icons.',
+            },
+            {
+              group: ['zod/*'],
+              message:
+                'Domínio e Shared Kernel devem permanecer 100% puros e independentes de Zod.',
             },
           ],
         },
