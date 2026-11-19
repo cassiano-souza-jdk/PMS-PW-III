@@ -18,7 +18,7 @@ export function resolveRootDexieTransaction(
   }
 
   let current: Transaction = transaction;
-  while (current.parent !== undefined) {
+  while (current.parent) {
     current = current.parent;
   }
 
