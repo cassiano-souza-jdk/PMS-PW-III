@@ -1,6 +1,15 @@
 import { delay, http, HttpResponse, type HttpHandler } from 'msw';
 import { AUDIT_CATEGORIES, AUDIT_RESULTS, type AuditEvent } from '@/modules/audit';
 import {
+  AuthService,
+  asSessionId,
+  type EnterDemoProfileInput,
+  type LoginWithPasswordInput,
+  type RegisterUserInput,
+} from '@/modules/authentication';
+import { WebCryptoSimulatedPasswordVerifier } from '@/modules/authentication/infrastructure/security/web-crypto-password-verifier';
+import { InMemoryEphemeralSessionPointer } from '@/modules/authentication/infrastructure/session/ephemeral-session-pointer';
+import {
   PERMISSION_CODES,
   assertAuthorized,
   type AuthorizationActor,
@@ -9,11 +18,17 @@ import {
 } from '@/modules/authorization';
 import { DEMO_SEED_VERSION } from '@/modules/demo';
 import {
+  OrganizationService,
+  type CreateOrganizationInput,
+  type UpdateOrganizationInput,
+} from '@/modules/organizations';
+import {
   PROJECT_MEMBER_ROLES,
   PROJECT_STATUSES,
   asProjectMemberId,
   type Project,
 } from '@/modules/projects';
+import { UserService, type UpdateMyProfileInput } from '@/modules/users';
 import {
   AuthenticationError,
   ValidationError,
@@ -44,12 +59,14 @@ import {
   type DomainEventPublisherPort,
   type IsoDateTime,
   type OrganizationId,
+  type OrganizationRole,
   type ProjectId,
   type TeamId,
   type TransactionPort,
   type UserId,
 } from '@/shared/kernel';
 import { PMS_DATABASE_NAME, PMS_SCHEMA_VERSION } from '@/shared/persistence';
+import type { AppServicesRegistry } from './container';
 import {
   DEMO_ORG_ID,
   ensureDemoOrganizationSeeded,
@@ -62,6 +79,7 @@ export interface MswCompositionDependencies {
   readonly transactionPort: TransactionPort;
   readonly eventBus: DomainEventPublisherPort;
   readonly simulationController: SimulationScenarioController;
+  readonly services?: AppServicesRegistry;
   readonly now?: () => IsoDateTime;
   readonly generateUuid?: () => string;
 }
@@ -309,13 +327,89 @@ function withSimulatedEndpoint(
   };
 }
 
+function resolveMswServices(deps: MswCompositionDependencies): AppServicesRegistry {
+  if (deps.services !== undefined) {
+    return deps.services;
+  }
+
+  const passwordVerifier = new WebCryptoSimulatedPasswordVerifier();
+  const ephemeralSessionPointer = new InMemoryEphemeralSessionPointer();
+
+  return Object.freeze({
+    auth: new AuthService({
+      users: deps.repositories.users.users,
+      localCredentials: deps.repositories.authentication.localCredentials,
+      userSessions: deps.repositories.authentication.userSessions,
+      auditEvents: deps.repositories.audit.auditEvents,
+      transactionPort: deps.transactionPort,
+      eventBus: deps.eventBus,
+      passwordVerifier,
+      ephemeralSessionPointer,
+      seedDemoOrganization: (now) =>
+        ensureDemoOrganizationSeeded(
+          {
+            repositories: deps.repositories,
+            transactionPort: deps.transactionPort,
+            eventBus: deps.eventBus,
+            passwordVerifier,
+          },
+          now,
+        ),
+      ...(deps.now !== undefined ? { now: deps.now } : {}),
+      ...(deps.generateUuid !== undefined ? { generateUuid: deps.generateUuid } : {}),
+    }),
+    users: new UserService({
+      users: deps.repositories.users.users,
+      auditEvents: deps.repositories.audit.auditEvents,
+      transactionPort: deps.transactionPort,
+      eventBus: deps.eventBus,
+      ...(deps.now !== undefined ? { now: deps.now } : {}),
+      ...(deps.generateUuid !== undefined ? { generateUuid: deps.generateUuid } : {}),
+    }),
+    organizations: new OrganizationService({
+      organizations: deps.repositories.organizations.organizations,
+      organizationMembers: deps.repositories.organizations.organizationMembers,
+      organizationSettings: deps.repositories.settings.organizationSettings,
+      users: deps.repositories.users.users,
+      permissionGrants: deps.repositories.authorization.permissionGrants,
+      explicitDenyRules: deps.repositories.authorization.explicitDenyRules,
+      auditEvents: deps.repositories.audit.auditEvents,
+      transactionPort: deps.transactionPort,
+      eventBus: deps.eventBus,
+      ...(deps.now !== undefined ? { now: deps.now } : {}),
+      ...(deps.generateUuid !== undefined ? { generateUuid: deps.generateUuid } : {}),
+    }),
+  });
+}
+
+function requireActorUserId(request: Request): UserId {
+  const rawActorId = request.headers.get(HTTP_HEADERS.ACTOR_USER_ID)?.trim();
+  if (!rawActorId) {
+    throw new AuthenticationError(
+      'Missing required x-actor-user-id header for authenticated endpoint.',
+    );
+  }
+
+  return asUserId(rawActorId, 'x-actor-user-id');
+}
+
+function resolveOptionalOrganizationHeader(request: Request): OrganizationId | undefined {
+  const rawOrgId = request.headers.get(HTTP_HEADERS.ORGANIZATION_ID)?.trim();
+  if (!rawOrgId) {
+    return undefined;
+  }
+  return asOrganizationId(rawOrgId, 'x-organization-id');
+}
+
 /**
  * Creates the canonical MSW v2 HTTP handlers backed by Dexie repositories and RBAC+ABAC policy engine
- * (API-SIMULATION.md, ADR-0003, ADR-0007 §5.2).
+ * (API-SIMULATION.md, ADR-0003, ADR-0007 §5.2, ADR-0008).
  *
  * Invariant: write endpoints ALWAYS await Dexie transaction commit before returning an HTTP success response.
  */
 export function createMswHandlers(deps: MswCompositionDependencies): readonly HttpHandler[] {
+  const services = resolveMswServices(deps);
+
   return [
     http.get(
       '*/api/v1/health',
@@ -350,34 +444,304 @@ export function createMswHandlers(deps: MswCompositionDependencies): readonly Ht
       }),
     ),
 
+    // -------------------------------------------------------------------------
+    // Phase 04 — Authentication & Device Sessions (delegating strictly to AuthService)
+    // -------------------------------------------------------------------------
+    http.post(
+      '*/api/v1/auth/register',
+      withSimulatedEndpoint(deps, async ({ request, correlationId, now, nextUuid }) => {
+        const rawBody = (await request.json().catch(() => null)) as RegisterUserInput | null;
+        if (!rawBody || typeof rawBody !== 'object') {
+          throw new ValidationError('Invalid JSON body for registration.');
+        }
+
+        const result = await services.auth.registerUser({
+          ...rawBody,
+          correlationId: asCorrelationId(isUuid(correlationId) ? correlationId : nextUuid()),
+        });
+
+        return buildSuccessResponse(result, correlationId, now, 201);
+      }),
+    ),
+
+    http.post(
+      '*/api/v1/auth/login',
+      withSimulatedEndpoint(deps, async ({ request, correlationId, now, nextUuid }) => {
+        const rawBody = (await request.json().catch(() => null)) as LoginWithPasswordInput | null;
+        if (!rawBody || typeof rawBody !== 'object') {
+          throw new ValidationError('Invalid JSON body for login.');
+        }
+
+        const result = await services.auth.loginWithPassword({
+          ...rawBody,
+          correlationId: asCorrelationId(isUuid(correlationId) ? correlationId : nextUuid()),
+        });
+
+        return buildSuccessResponse(result, correlationId, now, 200);
+      }),
+    ),
+
+    http.post(
+      '*/api/v1/auth/demo',
+      withSimulatedEndpoint(deps, async ({ request, correlationId, now, nextUuid }) => {
+        const rawBody = (await request.json().catch(() => null)) as EnterDemoProfileInput | null;
+        if (!rawBody || typeof rawBody !== 'object') {
+          throw new ValidationError('Invalid JSON body for demo profile entry.');
+        }
+
+        const result = await services.auth.enterDemoProfile({
+          ...rawBody,
+          correlationId: asCorrelationId(isUuid(correlationId) ? correlationId : nextUuid()),
+        });
+
+        return buildSuccessResponse(result, correlationId, now, 200);
+      }),
+    ),
+
+    http.post(
+      '*/api/v1/auth/logout',
+      withSimulatedEndpoint(deps, async ({ request, correlationId, now, nextUuid }) => {
+        const actorUserId = requireActorUserId(request);
+        const activeOrganizationId = resolveOptionalOrganizationHeader(request);
+        const rawBody = (await request.json().catch(() => null)) as {
+          readonly sessionId?: string;
+        } | null;
+
+        if (!rawBody || typeof rawBody.sessionId !== 'string') {
+          throw new ValidationError('Field "sessionId" is required to logout.');
+        }
+
+        await services.auth.logoutCurrentSession({
+          actorUserId,
+          sessionId: asSessionId(rawBody.sessionId, 'sessionId'),
+          ...(activeOrganizationId !== undefined ? { activeOrganizationId } : {}),
+          correlationId: asCorrelationId(isUuid(correlationId) ? correlationId : nextUuid()),
+        });
+
+        return buildSuccessResponse({ loggedOut: true }, correlationId, now, 200);
+      }),
+    ),
+
+    http.get(
+      '*/api/v1/auth/sessions',
+      withSimulatedEndpoint(deps, async ({ request, correlationId, now }) => {
+        const actorUserId = requireActorUserId(request);
+        const sessions = await services.auth.listUserSessions(actorUserId);
+        return buildSuccessResponse(sessions, correlationId, now, 200);
+      }),
+    ),
+
+    http.post(
+      '*/api/v1/auth/sessions/:sessionId/revoke',
+      withSimulatedEndpoint(deps, async ({ request, params, correlationId, now, nextUuid }) => {
+        const actorUserId = requireActorUserId(request);
+        const activeOrganizationId = resolveOptionalOrganizationHeader(request);
+        const sessionId = asSessionId(String(params.sessionId ?? ''), 'sessionId');
+        const rawBody = (await request.json().catch(() => null)) as {
+          readonly reason?: string;
+        } | null;
+
+        await services.auth.revokeSession({
+          actorUserId,
+          sessionId,
+          ...(rawBody?.reason !== undefined ? { reason: rawBody.reason } : {}),
+          ...(activeOrganizationId !== undefined ? { activeOrganizationId } : {}),
+          correlationId: asCorrelationId(isUuid(correlationId) ? correlationId : nextUuid()),
+        });
+
+        return buildSuccessResponse({ revoked: true, sessionId }, correlationId, now, 200);
+      }),
+    ),
+
+    // -------------------------------------------------------------------------
+    // Phase 04 — Current User Profile (delegating strictly to UserService)
+    // -------------------------------------------------------------------------
+    http.get(
+      '*/api/v1/users/me',
+      withSimulatedEndpoint(deps, async ({ request, correlationId, now }) => {
+        const actorUserId = requireActorUserId(request);
+        const profile = await services.users.getMyProfile(actorUserId);
+        return buildSuccessResponse(profile, correlationId, now, 200);
+      }),
+    ),
+
+    http.patch(
+      '*/api/v1/users/me',
+      withSimulatedEndpoint(deps, async ({ request, correlationId, now, nextUuid }) => {
+        const actorUserId = requireActorUserId(request);
+        const activeOrganizationId = resolveOptionalOrganizationHeader(request);
+        const rawBody = (await request.json().catch(() => null)) as UpdateMyProfileInput | null;
+        if (!rawBody || typeof rawBody !== 'object') {
+          throw new ValidationError('Invalid JSON body for profile update.');
+        }
+
+        const updated = await services.users.updateMyProfile(actorUserId, {
+          ...rawBody,
+          ...(activeOrganizationId !== undefined ? { activeOrganizationId } : {}),
+          correlationId: asCorrelationId(isUuid(correlationId) ? correlationId : nextUuid()),
+        });
+
+        return buildSuccessResponse(updated, correlationId, now, 200);
+      }),
+    ),
+
+    // -------------------------------------------------------------------------
+    // Phase 04 — Organizations & Memberships (delegating strictly to OrganizationService)
+    // -------------------------------------------------------------------------
+    http.get(
+      '*/api/v1/organizations',
+      withSimulatedEndpoint(deps, async ({ request, correlationId, now }) => {
+        const actorUserId = requireActorUserId(request);
+        const summaries = await services.organizations.listMyOrganizations(actorUserId);
+        return buildSuccessResponse(summaries, correlationId, now, 200);
+      }),
+    ),
+
+    http.post(
+      '*/api/v1/organizations',
+      withSimulatedEndpoint(deps, async ({ request, correlationId, now, nextUuid }) => {
+        const actorUserId = requireActorUserId(request);
+        const rawBody = (await request.json().catch(() => null)) as CreateOrganizationInput | null;
+        if (!rawBody || typeof rawBody !== 'object') {
+          throw new ValidationError('Invalid JSON body for organization creation.');
+        }
+
+        const created = await services.organizations.createOrganization(actorUserId, {
+          ...rawBody,
+          correlationId: asCorrelationId(isUuid(correlationId) ? correlationId : nextUuid()),
+        });
+
+        return buildSuccessResponse(created, correlationId, now, 201);
+      }),
+    ),
+
     http.get(
       '*/api/v1/organizations/:organizationId',
       withSimulatedEndpoint(deps, async ({ request, params, correlationId, now }) => {
+        const actorUserId = requireActorUserId(request);
         const organizationId = asOrganizationId(
           String(params.organizationId ?? ''),
           'organizationId',
         );
 
-        const organization =
-          await deps.repositories.organizations.organizations.findById(organizationId);
-
-        await authorizeOrThrow(
-          deps,
-          request,
+        const organization = await services.organizations.getOrganizationDetails(
+          actorUserId,
           organizationId,
-          PERMISSION_CODES.ORGANIZATION_VIEW,
-          {
-            kind: 'ORGANIZATION',
-            id: asEntityId(organizationId),
-            exists: organization !== null,
-            organizationId,
-            deletedAt: organization?.deletedAt,
-            archivedAt: organization?.archivedAt,
-          },
-          now,
         );
 
         return buildSuccessResponse(organization, correlationId, now, 200);
+      }),
+    ),
+
+    http.patch(
+      '*/api/v1/organizations/:organizationId',
+      withSimulatedEndpoint(deps, async ({ request, params, correlationId, now, nextUuid }) => {
+        const actorUserId = requireActorUserId(request);
+        const organizationId = asOrganizationId(
+          String(params.organizationId ?? ''),
+          'organizationId',
+        );
+        const rawBody = (await request.json().catch(() => null)) as UpdateOrganizationInput | null;
+        if (!rawBody || typeof rawBody !== 'object') {
+          throw new ValidationError('Invalid JSON body for organization update.');
+        }
+
+        const updated = await services.organizations.updateOrganization(
+          actorUserId,
+          organizationId,
+          {
+            ...rawBody,
+            correlationId: asCorrelationId(isUuid(correlationId) ? correlationId : nextUuid()),
+          },
+        );
+
+        return buildSuccessResponse(updated, correlationId, now, 200);
+      }),
+    ),
+
+    http.get(
+      '*/api/v1/organizations/:organizationId/members',
+      withSimulatedEndpoint(deps, async ({ request, params, correlationId, now }) => {
+        const actorUserId = requireActorUserId(request);
+        const organizationId = asOrganizationId(
+          String(params.organizationId ?? ''),
+          'organizationId',
+        );
+
+        const members = await services.organizations.listOrganizationMembers(
+          actorUserId,
+          organizationId,
+        );
+
+        return buildSuccessResponse(members, correlationId, now, 200);
+      }),
+    ),
+
+    http.patch(
+      '*/api/v1/organizations/:organizationId/members/:userId',
+      withSimulatedEndpoint(deps, async ({ request, params, correlationId, now, nextUuid }) => {
+        const actorUserId = requireActorUserId(request);
+        const organizationId = asOrganizationId(
+          String(params.organizationId ?? ''),
+          'organizationId',
+        );
+        const targetUserId = asUserId(String(params.userId ?? ''), 'userId');
+        const rawBody = (await request.json().catch(() => null)) as {
+          readonly role?: OrganizationRole;
+          readonly status?: 'ACTIVE' | 'SUSPENDED';
+        } | null;
+
+        if (!rawBody || (rawBody.role === undefined && rawBody.status === undefined)) {
+          throw new ValidationError(
+            'Member update requires at least "role" or "status" ("ACTIVE" | "SUSPENDED").',
+          );
+        }
+
+        const correlationUuid = asCorrelationId(isUuid(correlationId) ? correlationId : nextUuid());
+        let updatedMember;
+
+        if (rawBody.role !== undefined) {
+          updatedMember = await services.organizations.changeMemberRole(
+            actorUserId,
+            organizationId,
+            targetUserId,
+            rawBody.role,
+            { correlationId: correlationUuid },
+          );
+        }
+
+        if (rawBody.status !== undefined) {
+          updatedMember = await services.organizations.suspendOrReactivateMember(
+            actorUserId,
+            organizationId,
+            targetUserId,
+            rawBody.status,
+            { correlationId: correlationUuid },
+          );
+        }
+
+        return buildSuccessResponse(updatedMember, correlationId, now, 200);
+      }),
+    ),
+
+    http.post(
+      '*/api/v1/organizations/:organizationId/leave',
+      withSimulatedEndpoint(deps, async ({ request, params, correlationId, now, nextUuid }) => {
+        const actorUserId = requireActorUserId(request);
+        const organizationId = asOrganizationId(
+          String(params.organizationId ?? ''),
+          'organizationId',
+        );
+
+        const removedMembership = await services.organizations.leaveOrganization(
+          actorUserId,
+          organizationId,
+          {
+            correlationId: asCorrelationId(isUuid(correlationId) ? correlationId : nextUuid()),
+          },
+        );
+
+        return buildSuccessResponse(removedMembership, correlationId, now, 200);
       }),
     ),
 

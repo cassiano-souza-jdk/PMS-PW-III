@@ -11,6 +11,7 @@ export {
   AUXILIARY_TABLES,
   PMS_DATABASE_NAME,
   PMS_SCHEMA_V1_STORES,
+  PMS_SCHEMA_V2_STORES,
   PMS_SCHEMA_VERSION,
   PmsDatabase,
   createPmsDatabase,
@@ -19,6 +20,7 @@ export {
   type BackupPayloadRecord,
   type CreatePmsDatabaseOptions,
   type PmsTableName,
+  type PmsV1TableName,
 } from './pms-database';
 
 export {

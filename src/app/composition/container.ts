@@ -1,3 +1,15 @@
+import {
+  AuthService,
+  type EphemeralSessionPointerPort,
+  type PasswordVerifierPort,
+} from '@/modules/authentication';
+import { WebCryptoSimulatedPasswordVerifier } from '@/modules/authentication/infrastructure/security/web-crypto-password-verifier';
+import {
+  BrowserEphemeralSessionPointer,
+  InMemoryEphemeralSessionPointer,
+} from '@/modules/authentication/infrastructure/session/ephemeral-session-pointer';
+import { OrganizationService } from '@/modules/organizations';
+import { UserService } from '@/modules/users';
 import { env as defaultEnv, type AppEnv } from '@/shared/config';
 import {
   SimulationScenarioController,
@@ -18,6 +30,12 @@ import {
 import { ensureDemoOrganizationSeeded, type DemoOrganizationSeedResult } from './demo-seed';
 import { createRepositoriesRegistry, type AppRepositoriesRegistry } from './repositories-registry';
 
+export interface AppServicesRegistry {
+  readonly auth: AuthService;
+  readonly users: UserService;
+  readonly organizations: OrganizationService;
+}
+
 export interface AppCompositionContainer {
   readonly env: AppEnv;
   readonly logger: Logger;
@@ -26,6 +44,9 @@ export interface AppCompositionContainer {
   readonly transactionPort: TransactionPort;
   readonly attachmentBlobStore: AttachmentBlobStorePort;
   readonly repositories: AppRepositoriesRegistry;
+  readonly passwordVerifier: PasswordVerifierPort;
+  readonly ephemeralSessionPointer: EphemeralSessionPointerPort;
+  readonly services: AppServicesRegistry;
   readonly simulationController: SimulationScenarioController;
   readonly httpClient: HttpClient;
   readonly seedDemoOrganization: (now?: IsoDateTime) => Promise<DemoOrganizationSeedResult>;
@@ -40,9 +61,21 @@ export interface CreateAppContainerOptions {
   readonly transactionPort?: TransactionPort;
   readonly attachmentBlobStore?: AttachmentBlobStorePort;
   readonly repositories?: AppRepositoriesRegistry;
+  readonly passwordVerifier?: PasswordVerifierPort;
+  readonly ephemeralSessionPointer?: EphemeralSessionPointerPort;
+  readonly services?: AppServicesRegistry;
   readonly simulationController?: SimulationScenarioController;
   readonly httpClient?: HttpClient;
   readonly httpClientOptions?: CreateHttpClientOptions;
+  readonly now?: () => IsoDateTime;
+  readonly generateUuid?: () => string;
+}
+
+function createDefaultEphemeralSessionPointer(): EphemeralSessionPointerPort {
+  if (typeof window !== 'undefined' && typeof window.sessionStorage !== 'undefined') {
+    return new BrowserEphemeralSessionPointer();
+  }
+  return new InMemoryEphemeralSessionPointer();
 }
 
 export function createAppContainer(
@@ -62,6 +95,10 @@ export function createAppContainer(
   const resolvedAttachmentBlobStore =
     options.attachmentBlobStore ?? new DexieAttachmentBlobStore(resolvedDb);
   const resolvedRepositories = options.repositories ?? createRepositoriesRegistry(resolvedDb);
+  const resolvedPasswordVerifier =
+    options.passwordVerifier ?? new WebCryptoSimulatedPasswordVerifier();
+  const resolvedEphemeralSessionPointer =
+    options.ephemeralSessionPointer ?? createDefaultEphemeralSessionPointer();
   const resolvedSimulationController =
     options.simulationController ?? new SimulationScenarioController();
   const resolvedHttpClient = options.httpClient ?? createHttpClient(options.httpClientOptions);
@@ -72,9 +109,52 @@ export function createAppContainer(
         repositories: resolvedRepositories,
         transactionPort: resolvedTransactionPort,
         eventBus: resolvedEventBus,
+        passwordVerifier: resolvedPasswordVerifier,
       },
       now,
     );
+
+  const resolvedServices: AppServicesRegistry =
+    options.services ??
+    Object.freeze({
+      auth: new AuthService({
+        users: resolvedRepositories.users.users,
+        localCredentials: resolvedRepositories.authentication.localCredentials,
+        userSessions: resolvedRepositories.authentication.userSessions,
+        auditEvents: resolvedRepositories.audit.auditEvents,
+        transactionPort: resolvedTransactionPort,
+        eventBus: resolvedEventBus,
+        passwordVerifier: resolvedPasswordVerifier,
+        ephemeralSessionPointer: resolvedEphemeralSessionPointer,
+        seedDemoOrganization,
+        logger: resolvedLogger,
+        ...(options.now !== undefined ? { now: options.now } : {}),
+        ...(options.generateUuid !== undefined ? { generateUuid: options.generateUuid } : {}),
+      }),
+      users: new UserService({
+        users: resolvedRepositories.users.users,
+        auditEvents: resolvedRepositories.audit.auditEvents,
+        transactionPort: resolvedTransactionPort,
+        eventBus: resolvedEventBus,
+        logger: resolvedLogger,
+        ...(options.now !== undefined ? { now: options.now } : {}),
+        ...(options.generateUuid !== undefined ? { generateUuid: options.generateUuid } : {}),
+      }),
+      organizations: new OrganizationService({
+        organizations: resolvedRepositories.organizations.organizations,
+        organizationMembers: resolvedRepositories.organizations.organizationMembers,
+        organizationSettings: resolvedRepositories.settings.organizationSettings,
+        users: resolvedRepositories.users.users,
+        permissionGrants: resolvedRepositories.authorization.permissionGrants,
+        explicitDenyRules: resolvedRepositories.authorization.explicitDenyRules,
+        auditEvents: resolvedRepositories.audit.auditEvents,
+        transactionPort: resolvedTransactionPort,
+        eventBus: resolvedEventBus,
+        logger: resolvedLogger,
+        ...(options.now !== undefined ? { now: options.now } : {}),
+        ...(options.generateUuid !== undefined ? { generateUuid: options.generateUuid } : {}),
+      }),
+    });
 
   return Object.freeze({
     env: resolvedEnv,
@@ -84,6 +164,9 @@ export function createAppContainer(
     transactionPort: resolvedTransactionPort,
     attachmentBlobStore: resolvedAttachmentBlobStore,
     repositories: resolvedRepositories,
+    passwordVerifier: resolvedPasswordVerifier,
+    ephemeralSessionPointer: resolvedEphemeralSessionPointer,
+    services: resolvedServices,
     simulationController: resolvedSimulationController,
     httpClient: resolvedHttpClient,
     seedDemoOrganization,

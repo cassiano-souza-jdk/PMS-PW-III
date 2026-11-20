@@ -1,6 +1,7 @@
 export {
   createAppContainer,
   type AppCompositionContainer,
+  type AppServicesRegistry,
   type CreateAppContainerOptions,
 } from './container';
 export { CompositionProvider, type CompositionProviderProps } from './composition-context';
@@ -22,6 +23,7 @@ export {
   DEMO_PROJECT_ID,
   DEMO_TASK_IDS,
   DEMO_TEAM_ID,
+  ensureDemoCredentialsSeeded,
   ensureDemoOrganizationSeeded,
   type DemoOrganizationSeedResult,
   type DemoSeedDependencies,
