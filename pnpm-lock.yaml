@@ -8,6 +8,9 @@ importers:
 
   .:
     dependencies:
+      '@hookform/resolvers':
+        specifier: 3.10.0
+        version: 3.10.0(react-hook-form@7.55.0(react@18.3.1))
       '@radix-ui/react-slot':
         specifier: ^1.5.0
         version: 1.5.0(@types/react@18.3.31)(react@18.3.1)
@@ -32,6 +35,9 @@ importers:
       react-dom:
         specifier: ^18.3.1
         version: 18.3.1(react@18.3.1)
+      react-hook-form:
+        specifier: 7.55.0
+        version: 7.55.0(react@18.3.1)
       react-intl:
         specifier: ^7.1.14
         version: 7.1.14(react@18.3.1)(typescript@5.7.3)
@@ -483,6 +489,11 @@ packages:
     peerDependenciesMeta:
       typescript:
         optional: true
+
+  '@hookform/resolvers@3.10.0':
+    resolution: {integrity: sha512-79Dv+3mDF7i+2ajj7SkypSKHhl1cbln1OGavqrsF7p6mbUv11xpqpacPsGDCTRvCSjEEIez2ef1NveSVL3b0Ag==}
+    peerDependencies:
+      react-hook-form: ^7.0.0
 
   '@humanfs/core@0.19.2':
     resolution: {integrity: sha512-UhXNm+CFMWcbChXywFwkmhqjs3PRCmcSa/hfBgLIb7oQ5HNb1wS0icWsGtSAUNgefHeI+eBrA8I1fxmbHsGdvA==}
@@ -2350,6 +2361,12 @@ packages:
     peerDependencies:
       react: ^18.3.1
 
+  react-hook-form@7.55.0:
+    resolution: {integrity: sha512-XRnjsH3GVMQz1moZTW53MxfoWN7aDpUg/GpVNc4A3eXRVNdGXfbzJ4vM4aLQ8g6XCUh1nIbx70aaNCl7kxnjog==}
+    engines: {node: '>=18.0.0'}
+    peerDependencies:
+      react: ^16.8.0 || ^17 || ^18 || ^19
+
   react-intl@7.1.14:
     resolution: {integrity: sha512-VE/0Wi/lHJlBC7APQpCzLUdIt3GB5B0GZrRW8Q+ACbkHI4j+Wwgg9J1TniN6zmLHmPH5gxXcMy+fkSPfw5p1WQ==}
     peerDependencies:
@@ -3224,6 +3241,10 @@ snapshots:
       tslib: 2.9.1
     optionalDependencies:
       typescript: 5.7.3
+
+  '@hookform/resolvers@3.10.0(react-hook-form@7.55.0(react@18.3.1))':
+    dependencies:
+      react-hook-form: 7.55.0(react@18.3.1)
 
   '@humanfs/core@0.19.2':
     dependencies:
@@ -5162,6 +5183,10 @@ snapshots:
       loose-envify: 1.4.0
       react: 18.3.1
       scheduler: 0.23.2
+
+  react-hook-form@7.55.0(react@18.3.1):
+    dependencies:
+      react: 18.3.1
 
   react-intl@7.1.14(react@18.3.1)(typescript@5.7.3):
     dependencies:
