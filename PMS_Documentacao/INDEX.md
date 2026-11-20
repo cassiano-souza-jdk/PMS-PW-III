@@ -1,6 +1,6 @@
 # Índice do pacote PMS
 
-Total de arquivos Markdown: 35
+Total de arquivos Markdown: 36
 
 -   `ACCESSIBILITY.md`
 -   `ADR/ADR-0001-modular-layered-architecture.md`
@@ -10,6 +10,7 @@ Total de arquivos Markdown: 35
 -   `ADR/ADR-0005-workspace-layout-governance-and-boundaries.md`
 -   `ADR/ADR-0006-domain-model-authorization-and-module-contracts.md`
 -   `ADR/ADR-0007-dexie-persistence-and-msw-simulation-architecture.md`
+-   `ADR/ADR-0008-authentication-sessions-and-multi-organization-architecture.md`
 -   `AGENT-ROLES.md`
 -   `AGENT-WORKFLOW.md`
 -   `AGENTS.md`
