@@ -26,6 +26,7 @@ import {
   DexieTransactionAdapter,
   PMS_DATABASE_NAME,
   PMS_SCHEMA_V1_STORES,
+  PMS_SCHEMA_V2_STORES,
   PMS_SCHEMA_VERSION,
   PostCommitDomainEventBus,
   createPmsDatabase,
@@ -66,22 +67,27 @@ describe('PmsDatabase, DexieTransactionAdapter, PostCommitDomainEventBus & Dexie
     await db.delete();
   });
 
-  describe('Schema v1 e Inicialização Não-Destrutiva', () => {
-    it('registra exatamente 50 tabelas físicas (49 TRANSACTION_RESOURCES + backupPayloads) na versão 1', () => {
+  describe('Schema v2 e Inicialização Não-Destrutiva', () => {
+    it('registra exatamente 51 tabelas físicas (50 TRANSACTION_RESOURCES + backupPayloads) na versão 2 preservando o schema v1 de 50 tabelas', () => {
       const resourceNames = Object.values(TRANSACTION_RESOURCES);
-      expect(resourceNames).toHaveLength(49);
+      expect(resourceNames).toHaveLength(50);
 
-      const schemaTableKeys = Object.keys(PMS_SCHEMA_V1_STORES);
-      expect(schemaTableKeys).toHaveLength(50);
+      const schemaV1TableKeys = Object.keys(PMS_SCHEMA_V1_STORES);
+      expect(schemaV1TableKeys).toHaveLength(50);
+
+      const schemaV2TableKeys = Object.keys(PMS_SCHEMA_V2_STORES);
+      expect(schemaV2TableKeys).toHaveLength(51);
 
       const physicalTableNames = db.tables.map((table) => table.name);
-      expect(physicalTableNames).toHaveLength(50);
+      expect(physicalTableNames).toHaveLength(51);
       expect(db.verno).toBe(PMS_SCHEMA_VERSION);
+      expect(PMS_SCHEMA_VERSION).toBe(2);
 
       for (const resource of resourceNames) {
         expect(physicalTableNames).toContain(resource);
       }
       expect(physicalTableNames).toContain(AUXILIARY_TABLES.BACKUP_PAYLOADS);
+      expect(physicalTableNames).toContain(TRANSACTION_RESOURCES.LOCAL_CREDENTIALS);
     });
 
     it('abre o banco de forma não-destrutiva e preserva dados existentes ao reabrir outra instância sobre o mesmo banco', async () => {

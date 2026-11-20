@@ -2,7 +2,11 @@ import type { DashboardPreferenceRepositoryPort } from '@/modules/analytics';
 import { DexieDashboardPreferenceRepository } from '@/modules/analytics/infrastructure/repositories/dexie-analytics.repository';
 import type { AuditEventRepositoryPort } from '@/modules/audit';
 import { DexieAuditEventRepository } from '@/modules/audit/infrastructure/repositories/dexie-audit.repository';
-import type { UserSessionRepositoryPort } from '@/modules/authentication';
+import type {
+  LocalCredentialRepositoryPort,
+  UserSessionRepositoryPort,
+} from '@/modules/authentication';
+import { DexieLocalCredentialRepository } from '@/modules/authentication/infrastructure/repositories/dexie-local-credential.repository';
 import { DexieUserSessionRepository } from '@/modules/authentication/infrastructure/repositories/dexie-user-session.repository';
 import type {
   ExplicitDenyRuleRepositoryPort,
@@ -117,6 +121,7 @@ export interface AppRepositoriesRegistry {
     readonly explicitDenyRules: ExplicitDenyRuleRepositoryPort;
   };
   readonly authentication: {
+    readonly localCredentials: LocalCredentialRepositoryPort;
     readonly userSessions: UserSessionRepositoryPort;
   };
   readonly users: {
@@ -210,6 +215,7 @@ export function createRepositoriesRegistry(db: PmsDatabase): AppRepositoriesRegi
       explicitDenyRules: new DexieExplicitDenyRuleRepository(db),
     }),
     authentication: Object.freeze({
+      localCredentials: new DexieLocalCredentialRepository(db),
       userSessions: new DexieUserSessionRepository(db),
     }),
     users: Object.freeze({

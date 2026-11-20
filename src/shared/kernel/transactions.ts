@@ -5,6 +5,7 @@
  */
 export const TRANSACTION_RESOURCES = {
   USERS: 'users',
+  LOCAL_CREDENTIALS: 'localCredentials',
   USER_SESSIONS: 'userSessions',
   ORGANIZATIONS: 'organizations',
   ORGANIZATION_MEMBERS: 'organizationMembers',

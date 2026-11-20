@@ -1,4 +1,10 @@
 import {
+  DEMO_CREDENTIALS_BY_ROLE,
+  type LocalCredential,
+  type PasswordVerifierPort,
+} from '@/modules/authentication';
+import { WebCryptoSimulatedPasswordVerifier } from '@/modules/authentication/infrastructure/security/web-crypto-password-verifier';
+import {
   DEMO_SEED_VERSION,
   MAINTENANCE_ACTIONS,
   MAINTENANCE_STATUSES,
@@ -103,6 +109,7 @@ export interface DemoSeedDependencies {
   readonly repositories: AppRepositoriesRegistry;
   readonly transactionPort: TransactionPort;
   readonly eventBus?: DomainEventPublisherPort;
+  readonly passwordVerifier?: PasswordVerifierPort;
 }
 
 export interface DemoOrganizationSeedResult {
@@ -222,12 +229,90 @@ function buildDeterministicFeedbackCatalog(now: IsoDateTime): {
   };
 }
 
+async function buildDemoLocalCredentials(
+  passwordVerifier: PasswordVerifierPort,
+  now: IsoDateTime,
+): Promise<readonly LocalCredential[]> {
+  const specs = [
+    {
+      userId: DEMO_ADMIN_USER_ID,
+      descriptor: DEMO_CREDENTIALS_BY_ROLE[ORGANIZATION_ROLES.ADMIN],
+      salt: 'demo-salt-admin-0000000000000001',
+    },
+    {
+      userId: DEMO_MANAGER_USER_ID,
+      descriptor: DEMO_CREDENTIALS_BY_ROLE[ORGANIZATION_ROLES.MANAGER],
+      salt: 'demo-salt-manager-00000000000002',
+    },
+    {
+      userId: DEMO_MEMBER_USER_ID,
+      descriptor: DEMO_CREDENTIALS_BY_ROLE[ORGANIZATION_ROLES.MEMBER],
+      salt: 'demo-salt-member-000000000000003',
+    },
+  ] as const;
+
+  // CRITICAL (ADR-0008 §2.4): Compute all password verifiers OUTSIDE TransactionPort.run
+  const credentials: LocalCredential[] = [];
+  for (const spec of specs) {
+    const hashed = await passwordVerifier.hashPassword(spec.descriptor.password, spec.salt);
+    credentials.push({
+      userId: spec.userId,
+      email: spec.descriptor.email,
+      passwordVerifier: hashed.passwordVerifier,
+      salt: hashed.salt,
+      algorithm: hashed.algorithm,
+      updatedAt: now,
+    });
+  }
+
+  return credentials;
+}
+
+/**
+ * Idempotently seeds missing local credentials for the 3 canonical demo profiles
+ * (supports non-destructive Dexie schema v1 -> v2 upgrades without overwriting existing records — ADR-0008 §2.5).
+ */
+export async function ensureDemoCredentialsSeeded(
+  deps: DemoSeedDependencies,
+  now: IsoDateTime = DEMO_DEFAULT_SEED_TIMESTAMP,
+): Promise<number> {
+  const passwordVerifier = deps.passwordVerifier ?? new WebCryptoSimulatedPasswordVerifier();
+
+  const existingChecks = await Promise.all([
+    deps.repositories.authentication.localCredentials.findByUserId(DEMO_ADMIN_USER_ID),
+    deps.repositories.authentication.localCredentials.findByUserId(DEMO_MANAGER_USER_ID),
+    deps.repositories.authentication.localCredentials.findByUserId(DEMO_MEMBER_USER_ID),
+  ]);
+
+  if (existingChecks.every((credential) => credential !== null)) {
+    return 0;
+  }
+
+  // Compute outside Dexie transaction to prevent PrematureCommitError
+  const credentials = await buildDemoLocalCredentials(passwordVerifier, now);
+
+  return deps.transactionPort.run([TRANSACTION_RESOURCES.LOCAL_CREDENTIALS], async () => {
+    let createdCount = 0;
+    for (const credential of credentials) {
+      const existing = await deps.repositories.authentication.localCredentials.findByUserId(
+        credential.userId,
+      );
+      if (existing === null) {
+        await deps.repositories.authentication.localCredentials.save(credential);
+        createdCount += 1;
+      }
+    }
+    return createdCount;
+  });
+}
+
 /**
  * Idempotent and non-destructive deterministic seed for the isolated demo organization
- * (DATA-PERSISTENCE.md, PRD.md §18, ADR-0007 §5.3).
+ * (DATA-PERSISTENCE.md, PRD.md §18, ADR-0007 §5.3, ADR-0008 §2.5).
  *
- * If the canonical demo organization (`DEMO_ORG_ID`) already exists, returns immediately
- * with `{ seeded: false }` without modifying or overwriting any persisted record.
+ * If the canonical demo organization (`DEMO_ORG_ID`) already exists, ensures missing v2 demo
+ * credentials are backfilled idempotently and returns `{ seeded: false }` without modifying
+ * or overwriting any persisted record.
  */
 export async function ensureDemoOrganizationSeeded(
   deps: DemoSeedDependencies,
@@ -236,6 +321,7 @@ export async function ensureDemoOrganizationSeeded(
   const existingBeforeTx =
     await deps.repositories.organizations.organizations.findById(DEMO_ORG_ID);
   if (existingBeforeTx !== null) {
+    await ensureDemoCredentialsSeeded(deps, now);
     return Object.freeze({
       seeded: false,
       organizationId: DEMO_ORG_ID,
@@ -243,9 +329,14 @@ export async function ensureDemoOrganizationSeeded(
     });
   }
 
+  const passwordVerifier = deps.passwordVerifier ?? new WebCryptoSimulatedPasswordVerifier();
+  // CRITICAL (ADR-0008 §2.4): Compute demo password verifiers BEFORE opening Dexie transaction
+  const demoCredentials = await buildDemoLocalCredentials(passwordVerifier, now);
+
   return deps.transactionPort.run(
     [
       TRANSACTION_RESOURCES.USERS,
+      TRANSACTION_RESOURCES.LOCAL_CREDENTIALS,
       TRANSACTION_RESOURCES.ORGANIZATIONS,
       TRANSACTION_RESOURCES.ORGANIZATION_MEMBERS,
       TRANSACTION_RESOURCES.ORGANIZATION_SETTINGS,
@@ -276,8 +367,8 @@ export async function ensureDemoOrganizationSeeded(
       const demoUsers: readonly User[] = [
         {
           id: DEMO_ADMIN_USER_ID,
-          email: 'admin.demo@pms.local',
-          displayName: 'Ana Administradora (Demo)',
+          email: DEMO_CREDENTIALS_BY_ROLE[ORGANIZATION_ROLES.ADMIN].email,
+          displayName: DEMO_CREDENTIALS_BY_ROLE[ORGANIZATION_ROLES.ADMIN].displayName,
           acceptedTermsAt: now,
           emailVerifiedSimulated: true,
           createdAt: now,
@@ -285,8 +376,8 @@ export async function ensureDemoOrganizationSeeded(
         },
         {
           id: DEMO_MANAGER_USER_ID,
-          email: 'gestor.demo@pms.local',
-          displayName: 'Bruno Gestor (Demo)',
+          email: DEMO_CREDENTIALS_BY_ROLE[ORGANIZATION_ROLES.MANAGER].email,
+          displayName: DEMO_CREDENTIALS_BY_ROLE[ORGANIZATION_ROLES.MANAGER].displayName,
           acceptedTermsAt: now,
           emailVerifiedSimulated: true,
           createdAt: now,
@@ -294,8 +385,8 @@ export async function ensureDemoOrganizationSeeded(
         },
         {
           id: DEMO_MEMBER_USER_ID,
-          email: 'membro.demo@pms.local',
-          displayName: 'Carla Membro (Demo)',
+          email: DEMO_CREDENTIALS_BY_ROLE[ORGANIZATION_ROLES.MEMBER].email,
+          displayName: DEMO_CREDENTIALS_BY_ROLE[ORGANIZATION_ROLES.MEMBER].displayName,
           acceptedTermsAt: now,
           emailVerifiedSimulated: true,
           createdAt: now,
@@ -307,6 +398,14 @@ export async function ensureDemoOrganizationSeeded(
         const existingUser = await deps.repositories.users.users.findById(user.id);
         if (!existingUser) {
           await deps.repositories.users.users.save(user);
+        }
+      }
+
+      for (const credential of demoCredentials) {
+        const existingCredential =
+          await deps.repositories.authentication.localCredentials.findByUserId(credential.userId);
+        if (!existingCredential) {
+          await deps.repositories.authentication.localCredentials.save(credential);
         }
       }
 

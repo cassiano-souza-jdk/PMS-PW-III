@@ -7,7 +7,7 @@ import {
 } from '@/shared/kernel';
 import { withPersistenceErrorHandling, type PmsDatabase } from '@/shared/persistence';
 import type { UserSessionRepositoryPort } from '../../application/ports/user-session-repository.port';
-import type { SessionId, UserSession } from '../../domain/user-session';
+import { isSessionActiveAt, type SessionId, type UserSession } from '../../domain/user-session';
 
 export class DexieUserSessionRepository implements UserSessionRepositoryPort {
   private readonly db: PmsDatabase;
@@ -33,6 +33,30 @@ export class DexieUserSessionRepository implements UserSessionRepositoryPort {
       return records.sort(
         (a, b) => parseIsoDateTimeMs(b.createdAt) - parseIsoDateTimeMs(a.createdAt),
       );
+    });
+  }
+
+  async findLatestActivePersistent(now: IsoDateTime): Promise<UserSession | null> {
+    return withPersistenceErrorHandling('UserSession.findLatestActivePersistent', async () => {
+      const allSessions = await this.table.toArray();
+      const activePersistent = allSessions.filter(
+        (session) => session.persistent && isSessionActiveAt(session, now),
+      );
+
+      if (activePersistent.length === 0) {
+        return null;
+      }
+
+      activePersistent.sort((a, b) => {
+        const activityDiff =
+          parseIsoDateTimeMs(b.lastActivityAt) - parseIsoDateTimeMs(a.lastActivityAt);
+        if (activityDiff !== 0) {
+          return activityDiff;
+        }
+        return parseIsoDateTimeMs(b.createdAt) - parseIsoDateTimeMs(a.createdAt);
+      });
+
+      return activePersistent[0] ?? null;
     });
   }
 

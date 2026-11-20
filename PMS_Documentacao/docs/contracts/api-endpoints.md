@@ -1,7 +1,7 @@
 # Contrato de Endpoints Simulados (HTTP Client + MSW v2)
 
-- **Fase:** 03 — Dexie, IndexedDB, Repositórios e MSW
-- **Referências normativas:** `API-SIMULATION.md`, `DATA-PERSISTENCE.md`, `ARCHITECTURE.md`, `PERMISSIONS.md`, `SECURITY.md`, `ADR-0002`, `ADR-0003`, `ADR-0007`, `docs/contracts/event-envelope.md`, `docs/contracts/permission-matrix.md`.
+- **Fase:** 03–04 — Dexie, IndexedDB, Repositórios, MSW, Autenticação, Usuários e Organizações
+- **Referências normativas:** `API-SIMULATION.md`, `DATA-PERSISTENCE.md`, `ARCHITECTURE.md`, `PERMISSIONS.md`, `SECURITY.md`, `ADR-0002`, `ADR-0003`, `ADR-0007`, `ADR-0008`, `docs/contracts/event-envelope.md`, `docs/contracts/permission-matrix.md`.
 
 ## 1. Visão Geral e Princípios Invioláveis
 
@@ -82,13 +82,13 @@ Todo handler registrado em `createMswHandlers` passa pelo `SimulationScenarioCon
 ## 6. Catálogo de Endpoints Base (Fase 03)
 
 ### 6.1 `GET /api/v1/health`
-- **Propósito:** diagnóstico local do banco Dexie (`pms_local_db`), versão do schema (`1`), versão da seed demo (`1.0.0`) e indicador `demoOrganizationSeeded`.
+- **Propósito:** diagnóstico local do banco Dexie (`pms_local_db`), versão do schema (`2`), versão da seed demo (`1.0.0`) e indicador `demoOrganizationSeeded`.
 - **Autorização:** público (diagnóstico local).
 - **Response (`200 OK`):** `ApiSuccessEnvelope<HealthEndpointResponse>`.
 
 ### 6.2 `POST /api/v1/demo/seed`
-- **Propósito:** dispara `ensureDemoOrganizationSeeded` dentro de transação Dexie de 16 stores.
-- **Comportamento idempotente:** retorna `201 Created` (`{ seeded: true, organizationId, seedVersion }`) na primeira execução e `200 OK` (`{ seeded: false, organizationId, seedVersion }`) nas chamadas subsequentes sem sobrescrever dados existentes.
+- **Propósito:** dispara `ensureDemoOrganizationSeeded` dentro de transação Dexie de 17 stores (incluindo `localCredentials`, com verificadores calculados previamente fora da transação).
+- **Comportamento idempotente:** retorna `201 Created` (`{ seeded: true, organizationId, seedVersion }`) na primeira execução e `200 OK` (`{ seeded: false, organizationId, seedVersion }`) nas chamadas subsequentes sem sobrescrever dados existentes (aplicando backfill idempotente de credenciais demo em upgrades `v1 -> v2`).
 - **Eventos pós-commit:** emite `demo.organization.seeded` apenas quando `seeded === true` e somente após o commit da transação Dexie.
 
 ### 6.3 `GET /api/v1/organizations/:organizationId`
@@ -120,3 +120,72 @@ Todo handler registrado em `createMswHandlers` passa pelo `SimulationScenarioCon
 - **Query Params:** `page` (default `1`), `pageSize` (default `20`).
 - **Autorização:** `PERMISSION_CODES.AUDIT_ORGANIZATION_VIEW`.
 - **Response (`200 OK`):** `ApiSuccessEnvelope<PaginatedResult<AuditEvent>>`.
+
+---
+
+## 7. Catálogo de Endpoints da Fase 04 (Autenticação, Usuários e Organizações)
+
+Todos os endpoints abaixo delegam estritamente aos casos de uso em `container.services` (`AuthService`, `UserService`, `OrganizationService`), sem duplicar regras de negócio nos handlers MSW (`ADR-0008`).
+
+### 7.1 `POST /api/v1/auth/register`
+- **Propósito:** cria conta local (`User`, `LocalCredential` com verificador SHA-256 + salt calculado fora da transação e `UserSession` inicial) e emite `accessToken` simulado (`pms_sim_<uuid>`) apenas em memória.
+- **Autorização:** público.
+- **Request Body:** `{ email: string, password: string, displayName: string, acceptTerms: true, persistent?: boolean, deviceLabel?: string }`.
+- **Response (`201 Created`):** `ApiSuccessEnvelope<AuthSessionResult>`.
+- **Erros:** `409 Conflict` (e-mail já cadastrado), `422 Unprocessable Entity` (payload inválido ou termos não aceitos).
+
+### 7.2 `POST /api/v1/auth/login`
+- **Propósito:** autentica usuário local via `LocalCredential` (verificação fora da transação Dexie) e persiste nova `UserSession`.
+- **Autorização:** público.
+- **Request Body:** `{ email: string, password: string, persistent?: boolean, deviceLabel?: string }`.
+- **Response (`200 OK`):** `ApiSuccessEnvelope<AuthSessionResult>`.
+- **Erros:** `401 Unauthorized` (credenciais inválidas ou usuário excluído), `422 Unprocessable Entity`.
+
+### 7.3 `POST /api/v1/auth/demo`
+- **Propósito:** garante seed idempotente da organização demonstrativa (`DEMO_ORG_ID`) e inicia sessão simulada no perfil `ADMIN`, `MANAGER` ou `MEMBER`, registrando `AuditEvent` na organização demo.
+- **Autorização:** público.
+- **Request Body:** `{ role: 'ADMIN' | 'MANAGER' | 'MEMBER', persistent?: boolean, deviceLabel?: string }`.
+- **Response (`200 OK`):** `ApiSuccessEnvelope<EnterDemoProfileResult>`.
+
+### 7.4 `POST /api/v1/auth/logout`
+- **Cabeçalhos:** `x-actor-user-id`, `x-correlation-id`, `x-organization-id` (opcional).
+- **Request Body:** `{ sessionId: string }`.
+- **Comportamento:** revoga a sessão própria (`revokedAt`) no IndexedDB, registra `AuditEvent` se `x-organization-id` for informado e limpa ponteiro efêmero quando aplicável.
+- **Response (`200 OK`):** `ApiSuccessEnvelope<{ loggedOut: true }>`.
+
+### 7.5 `GET /api/v1/auth/sessions`
+- **Cabeçalhos:** `x-actor-user-id`, `x-correlation-id`.
+- **Propósito:** lista as sessões locais do próprio usuário autenticado ordenadas por `createdAt DESC`.
+- **Response (`200 OK`):** `ApiSuccessEnvelope<readonly UserSession[]>`.
+
+### 7.6 `POST /api/v1/auth/sessions/:sessionId/revoke`
+- **Cabeçalhos:** `x-actor-user-id`, `x-correlation-id`, `x-organization-id` (opcional).
+- **Request Body (opcional):** `{ reason?: string }`.
+- **Autorização:** apenas o próprio titular da sessão (`403 Forbidden` se tentar revogar sessão de terceiros).
+- **Response (`200 OK`):** `ApiSuccessEnvelope<{ revoked: true, sessionId: SessionId }>`.
+
+### 7.7 `GET /api/v1/users/me` e `PATCH /api/v1/users/me`
+- **Cabeçalhos:** `x-actor-user-id`, `x-correlation-id`, `x-organization-id` (opcional no `PATCH`).
+- **Propósito:** consulta e atualiza o perfil do próprio usuário (`displayName` e `avatarUrl?`), sem alterar papéis ou associações organizacionais e sem jamais expor credenciais.
+- **Response (`200 OK`):** `ApiSuccessEnvelope<User>`.
+
+### 7.8 `GET /api/v1/organizations` e `POST /api/v1/organizations`
+- **Cabeçalhos:** `x-actor-user-id`, `x-correlation-id`.
+- **`GET`:** retorna projeção mínima (`MyOrganizationSummary[]`: `{ id, name, slug, isDemo, role, status }`) das organizações com associação `ACTIVE` do ator (`PRD.md` §5, `ADR-0008` §4.4).
+- **`POST`:** cria atomicamente `Organization`, `OrganizationMember` (`ADMIN`), `OrganizationSettings` padrão e `AuditEvent`, retornando `201 Created` (`CreateOrganizationResult`). Erro `409 Conflict` se `slug` já existir.
+
+### 7.9 `PATCH /api/v1/organizations/:organizationId`
+- **Cabeçalhos:** `x-actor-user-id`, `x-correlation-id`.
+- **Autorização:** `PERMISSION_CODES.ORGANIZATION_UPDATE`.
+- **Request Body:** `{ name?: string, description?: string | null }`.
+- **Response (`200 OK`):** `ApiSuccessEnvelope<Organization>`.
+
+### 7.10 `GET /api/v1/organizations/:organizationId/members` e `PATCH /api/v1/organizations/:organizationId/members/:userId`
+- **Cabeçalhos:** `x-actor-user-id`, `x-correlation-id`.
+- **`GET`:** exige `PERMISSION_CODES.ORGANIZATION_MEMBERS_VIEW`; retorna membros enriquecidos com `displayName`, `email` e `avatarUrl?`.
+- **`PATCH`:** exige `ORGANIZATION_ROLES_MANAGE` (quando altera `role`) e/ou `ORGANIZATION_MEMBERS_MANAGE` (quando altera `status` entre `ACTIVE` e `SUSPENDED`), protegido por `assertCanChangeOrRemoveAdmin` (`409 Conflict` ao tentar rebaixar ou suspender o último `ADMIN` ativo) com gravação de `AuditEvent`.
+
+### 7.11 `POST /api/v1/organizations/:organizationId/leave`
+- **Cabeçalhos:** `x-actor-user-id`, `x-correlation-id`.
+- **Comportamento:** permite que o próprio ator saia da organização (`status: 'REMOVED'`), revoga grants ativos do usuário naquela organização, registra `AuditEvent`, bloqueia saída do último `ADMIN` ativo (`409 Conflict`) e **nunca** revoga a sessão global `UserSession`.
+- **Response (`200 OK`):** `ApiSuccessEnvelope<OrganizationMember>`.

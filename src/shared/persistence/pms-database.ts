@@ -11,7 +11,7 @@ import { withPersistenceErrorHandling } from './quota-error';
 
 export const PMS_DATABASE_NAME = 'pms_local_db' as const;
 
-export const PMS_SCHEMA_VERSION = 1 as const;
+export const PMS_SCHEMA_VERSION = 2 as const;
 
 export const AUXILIARY_TABLES = {
   BACKUP_PAYLOADS: 'backupPayloads',
@@ -20,6 +20,8 @@ export const AUXILIARY_TABLES = {
 export type AuxiliaryTableName = (typeof AUXILIARY_TABLES)[keyof typeof AUXILIARY_TABLES];
 
 export type PmsTableName = TransactionResource | AuxiliaryTableName;
+
+export type PmsV1TableName = Exclude<PmsTableName, typeof TRANSACTION_RESOURCES.LOCAL_CREDENTIALS>;
 
 export interface BackupPayloadRecord {
   readonly backupId: BackupId;
@@ -36,7 +38,7 @@ export interface BackupPayloadRecord {
  * - All organizational stores declare compound indexes prefixed by `organizationId`.
  * - Zero boolean properties and zero optional (`undefined`) properties inside compound indexes.
  */
-export const PMS_SCHEMA_V1_STORES: Readonly<Record<PmsTableName, string>> = Object.freeze({
+export const PMS_SCHEMA_V1_STORES: Readonly<Record<PmsV1TableName, string>> = Object.freeze({
   [TRANSACTION_RESOURCES.USERS]: 'id, &email',
   [TRANSACTION_RESOURCES.USER_SESSIONS]: 'id, userId, [userId+createdAt]',
   [TRANSACTION_RESOURCES.ORGANIZATIONS]: 'id, &slug',
@@ -126,6 +128,19 @@ export const PMS_SCHEMA_V1_STORES: Readonly<Record<PmsTableName, string>> = Obje
   [AUXILIARY_TABLES.BACKUP_PAYLOADS]: 'backupId, organizationId',
 });
 
+/**
+ * Exact 51-table Dexie v4 schema v2 (50 TRANSACTION_RESOURCES + auxiliary `backupPayloads`).
+ *
+ * Non-destructive additive upgrade v1 -> v2 (ADR-0008 §2.2):
+ * - Preserves all 50 stores from v1 untouched.
+ * - Adds `localCredentials` (`userId, &email`) decoupled from `users` so simulated password verifiers
+ *   never leak into User DTOs, member lists, audit logs or JSON exports.
+ */
+export const PMS_SCHEMA_V2_STORES: Readonly<Record<PmsTableName, string>> = Object.freeze({
+  ...PMS_SCHEMA_V1_STORES,
+  [TRANSACTION_RESOURCES.LOCAL_CREDENTIALS]: 'userId, &email',
+});
+
 export interface CreatePmsDatabaseOptions extends DexieOptions {
   readonly databaseName?: string;
 }
@@ -139,6 +154,7 @@ export interface CreatePmsDatabaseOptions extends DexieOptions {
  */
 export class PmsDatabase extends Dexie {
   readonly users!: Table<Record<string, unknown>, string>;
+  readonly localCredentials!: Table<Record<string, unknown>, string>;
   readonly userSessions!: Table<Record<string, unknown>, string>;
   readonly organizations!: Table<Record<string, unknown>, string>;
   readonly organizationMembers!: Table<Record<string, unknown>, string>;
@@ -191,7 +207,8 @@ export class PmsDatabase extends Dexie {
 
   constructor(databaseName: string = PMS_DATABASE_NAME, options?: DexieOptions) {
     super(databaseName, options);
-    this.version(PMS_SCHEMA_VERSION).stores({ ...PMS_SCHEMA_V1_STORES });
+    this.version(1).stores({ ...PMS_SCHEMA_V1_STORES });
+    this.version(PMS_SCHEMA_VERSION).stores({ ...PMS_SCHEMA_V2_STORES });
   }
 
   /**
