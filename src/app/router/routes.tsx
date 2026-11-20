@@ -1,6 +1,17 @@
 import { createBrowserRouter, type RouteObject } from 'react-router';
 import { AppShell } from '@/app/layout/app-shell';
-import { LazyFoundationHomePage, LazyNotFoundPage } from './lazy-pages';
+import {
+  LazyDemoPage,
+  LazyFoundationHomePage,
+  LazyLoginPage,
+  LazyNotFoundPage,
+  LazyOrganizationSettingsPage,
+  LazyOrganizationsPage,
+  LazyProfilePage,
+  LazyRecoverPasswordPage,
+  LazyRegisterPage,
+} from './lazy-pages';
+import { RequireAuth } from './require-auth';
 
 export const appRoutes: RouteObject[] = [
   {
@@ -10,6 +21,39 @@ export const appRoutes: RouteObject[] = [
       {
         index: true,
         element: <LazyFoundationHomePage />,
+      },
+      {
+        path: 'login',
+        element: <LazyLoginPage />,
+      },
+      {
+        path: 'register',
+        element: <LazyRegisterPage />,
+      },
+      {
+        path: 'recover-password',
+        element: <LazyRecoverPasswordPage />,
+      },
+      {
+        path: 'demo',
+        element: <LazyDemoPage />,
+      },
+      {
+        element: <RequireAuth />,
+        children: [
+          {
+            path: 'organizations',
+            element: <LazyOrganizationsPage />,
+          },
+          {
+            path: 'profile',
+            element: <LazyProfilePage />,
+          },
+          {
+            path: 'settings',
+            element: <LazyOrganizationSettingsPage />,
+          },
+        ],
       },
       {
         path: '*',
