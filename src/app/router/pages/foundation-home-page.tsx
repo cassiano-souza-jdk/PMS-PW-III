@@ -1,11 +1,23 @@
-import { IconAccessible, IconLanguage, IconLayersLinked, IconTerminal2 } from '@tabler/icons-react';
+import {
+  IconAccessible,
+  IconBuilding,
+  IconLanguage,
+  IconLayersLinked,
+  IconLogin,
+  IconSparkles,
+  IconTerminal2,
+  IconUserCircle,
+} from '@tabler/icons-react';
 import { useIntl } from 'react-intl';
+import { Link } from 'react-router';
 import { useComposition } from '@/app/composition';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/shared/ui';
+import { useAuth } from '@/app/providers';
+import { Button, Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/shared/ui';
 
 export function FoundationHomePage() {
   const intl = useIntl();
   const { env } = useComposition();
+  const { isAuthenticated } = useAuth();
 
   const pillars = [
     {
@@ -43,7 +55,7 @@ export function FoundationHomePage() {
 
   return (
     <section aria-labelledby="foundation-heading" className="space-y-8">
-      <div className="space-y-3">
+      <div className="space-y-4">
         <span className="inline-flex items-center rounded-full border border-primary/30 bg-primary/10 px-3 py-1 text-xs font-semibold text-primary">
           {intl.formatMessage({ id: 'foundation.statusBadge' })}
         </span>
@@ -56,6 +68,40 @@ export function FoundationHomePage() {
         <p className="max-w-2xl text-base text-muted-foreground">
           {intl.formatMessage({ id: 'foundation.subtitle' })}
         </p>
+
+        <div className="flex flex-wrap items-center gap-3 pt-1">
+          {isAuthenticated ? (
+            <>
+              <Button asChild>
+                <Link to="/organizations">
+                  <IconBuilding className="h-4 w-4" aria-hidden="true" />
+                  <span>{intl.formatMessage({ id: 'nav.organizations' })}</span>
+                </Link>
+              </Button>
+              <Button asChild variant="outline">
+                <Link to="/profile">
+                  <IconUserCircle className="h-4 w-4" aria-hidden="true" />
+                  <span>{intl.formatMessage({ id: 'nav.profile' })}</span>
+                </Link>
+              </Button>
+            </>
+          ) : (
+            <>
+              <Button asChild>
+                <Link to="/demo">
+                  <IconSparkles className="h-4 w-4" aria-hidden="true" />
+                  <span>{intl.formatMessage({ id: 'auth.login.demoShortcut' })}</span>
+                </Link>
+              </Button>
+              <Button asChild variant="outline">
+                <Link to="/login">
+                  <IconLogin className="h-4 w-4" aria-hidden="true" />
+                  <span>{intl.formatMessage({ id: 'nav.login' })}</span>
+                </Link>
+              </Button>
+            </>
+          )}
+        </div>
       </div>
 
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
