@@ -1,3 +1,4 @@
+import { Dexie } from 'dexie';
 import { IDBFactory, IDBKeyRange } from 'fake-indexeddb';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
@@ -129,6 +130,110 @@ describe('PmsDatabase, DexieTransactionAdapter, PostCommitDomainEventBus & Dexie
 
       secondInstance.close();
       await secondInstance.delete();
+    });
+
+    it('executa migração não-destrutiva version(1) -> version(2) preservando Organization e User gravados na v1 e habilitando escrita/leitura na nova tabela localCredentials', async () => {
+      const migrationIdbFactory = new IDBFactory();
+      const migratedDbName = `${PMS_DATABASE_NAME}_v1_to_v2_${crypto.randomUUID()}`;
+
+      // 1. Abrir um banco Dexie estritamente na version(1) com PMS_SCHEMA_V1_STORES
+      const legacyV1Db = new Dexie(migratedDbName, {
+        indexedDB: migrationIdbFactory,
+        IDBKeyRange,
+      });
+      legacyV1Db.version(1).stores({ ...PMS_SCHEMA_V1_STORES });
+      await legacyV1Db.open();
+
+      expect(legacyV1Db.verno).toBe(1);
+      expect(legacyV1Db.tables.map((table) => table.name)).toHaveLength(50);
+      expect(legacyV1Db.tables.map((table) => table.name)).not.toContain(
+        TRANSACTION_RESOURCES.LOCAL_CREDENTIALS,
+      );
+
+      await legacyV1Db.table(TRANSACTION_RESOURCES.ORGANIZATIONS).put({
+        id: ORG_A_ID,
+        name: 'Organizacao Legada v1',
+        slug: 'org-legada-v1',
+        isDemo: false,
+        createdByUserId: ACTOR_USER_ID,
+        createdAt: FIXED_NOW,
+        updatedAt: FIXED_NOW,
+      });
+
+      await legacyV1Db.table(TRANSACTION_RESOURCES.USERS).put({
+        id: ACTOR_USER_ID,
+        email: 'legado.v1@pms.local',
+        displayName: 'Usuario Legado v1',
+        acceptedTermsAt: FIXED_NOW,
+        emailVerifiedSimulated: true,
+        createdAt: FIXED_NOW,
+        updatedAt: FIXED_NOW,
+      });
+
+      legacyV1Db.close();
+
+      // 2. Reabrir o mesmo banco via createPmsDatabase (upgrade automático v1 -> v2)
+      const upgradedV2Db = createPmsDatabase({
+        databaseName: migratedDbName,
+        indexedDB: migrationIdbFactory,
+        IDBKeyRange,
+      });
+      await ensureDatabaseOpen(upgradedV2Db);
+
+      expect(upgradedV2Db.verno).toBe(2);
+      expect(upgradedV2Db.tables.map((table) => table.name)).toHaveLength(51);
+      expect(upgradedV2Db.tables.map((table) => table.name)).toContain(
+        TRANSACTION_RESOURCES.LOCAL_CREDENTIALS,
+      );
+
+      // 3. Comprovar preservação integral dos dados gravados na v1
+      const preservedOrg = await upgradedV2Db.organizations.get(ORG_A_ID);
+      expect(preservedOrg).toEqual({
+        id: ORG_A_ID,
+        name: 'Organizacao Legada v1',
+        slug: 'org-legada-v1',
+        isDemo: false,
+        createdByUserId: ACTOR_USER_ID,
+        createdAt: FIXED_NOW,
+        updatedAt: FIXED_NOW,
+      });
+
+      const preservedUser = await upgradedV2Db.users.get(ACTOR_USER_ID);
+      expect(preservedUser).toEqual({
+        id: ACTOR_USER_ID,
+        email: 'legado.v1@pms.local',
+        displayName: 'Usuario Legado v1',
+        acceptedTermsAt: FIXED_NOW,
+        emailVerifiedSimulated: true,
+        createdAt: FIXED_NOW,
+        updatedAt: FIXED_NOW,
+      });
+
+      // 4. Comprovar escrita e leitura na nova tabela localCredentials (chave primária userId, índice único &email)
+      await upgradedV2Db.localCredentials.put({
+        userId: ACTOR_USER_ID,
+        email: 'legado.v1@pms.local',
+        passwordVerifier: 'sha256-verifier-migrated',
+        salt: 'salt-migrated-0001',
+        algorithm: 'SHA-256-SIMULATED',
+        updatedAt: FIXED_NOW,
+      });
+
+      const storedByUserId = await upgradedV2Db.localCredentials.get(ACTOR_USER_ID);
+      expect(storedByUserId).toMatchObject({
+        userId: ACTOR_USER_ID,
+        email: 'legado.v1@pms.local',
+        algorithm: 'SHA-256-SIMULATED',
+      });
+
+      const storedByEmail = await upgradedV2Db.localCredentials
+        .where('email')
+        .equals('legado.v1@pms.local')
+        .first();
+      expect(storedByEmail?.userId).toBe(ACTOR_USER_ID);
+
+      upgradedV2Db.close();
+      await upgradedV2Db.delete();
     });
   });
 
