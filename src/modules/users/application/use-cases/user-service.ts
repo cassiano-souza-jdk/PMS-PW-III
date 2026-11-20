@@ -53,6 +53,10 @@ export interface UserServiceDependencies {
   readonly auditEvents: AuditEventRepositoryPort;
   readonly transactionPort: TransactionPort;
   readonly eventBus: DomainEventPublisherPort;
+  readonly isActiveOrganizationMember?: (
+    organizationId: OrganizationId,
+    userId: UserId,
+  ) => Promise<boolean>;
   readonly logger?: Logger;
   readonly now?: () => IsoDateTime;
   readonly generateUuid?: () => string;
@@ -150,18 +154,32 @@ export class UserService {
       updatedAt: now,
     };
 
+    let verifiedAuditOrganizationId: OrganizationId | undefined = input.activeOrganizationId;
+    if (
+      verifiedAuditOrganizationId !== undefined &&
+      this.deps.isActiveOrganizationMember !== undefined
+    ) {
+      const isActiveMember = await this.deps.isActiveOrganizationMember(
+        verifiedAuditOrganizationId,
+        validatedUserId,
+      );
+      if (!isActiveMember) {
+        verifiedAuditOrganizationId = undefined;
+      }
+    }
+
     const resources =
-      input.activeOrganizationId !== undefined
+      verifiedAuditOrganizationId !== undefined
         ? ([TRANSACTION_RESOURCES.USERS, TRANSACTION_RESOURCES.AUDIT_EVENTS] as const)
         : ([TRANSACTION_RESOURCES.USERS] as const);
 
     await this.deps.transactionPort.run(resources, async () => {
       await this.deps.users.save(updatedUser);
 
-      if (input.activeOrganizationId !== undefined) {
+      if (verifiedAuditOrganizationId !== undefined) {
         const auditEvent: AuditEvent = {
           id: asAuditEventId(this.nextUuid()),
-          organizationId: input.activeOrganizationId,
+          organizationId: verifiedAuditOrganizationId,
           actorId: validatedUserId,
           occurredAt: now,
           category: AUDIT_CATEGORIES.ORGANIZATION,
@@ -187,8 +205,8 @@ export class UserService {
           eventId: asEventId(this.nextUuid()),
           eventType: 'user.profile.updated',
           occurredAt: now,
-          ...(input.activeOrganizationId !== undefined
-            ? { organizationId: input.activeOrganizationId }
+          ...(verifiedAuditOrganizationId !== undefined
+            ? { organizationId: verifiedAuditOrganizationId }
             : {}),
           actorId: validatedUserId,
           correlationId,

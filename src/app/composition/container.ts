@@ -17,7 +17,14 @@ import {
   type CreateHttpClientOptions,
   type HttpClient,
 } from '@/shared/http';
-import type { AttachmentBlobStorePort, IsoDateTime, TransactionPort } from '@/shared/kernel';
+import {
+  MEMBERSHIP_STATUSES,
+  type AttachmentBlobStorePort,
+  type IsoDateTime,
+  type OrganizationId,
+  type TransactionPort,
+  type UserId,
+} from '@/shared/kernel';
 import { createLogger, type Logger } from '@/shared/logging';
 import {
   DexieAttachmentBlobStore,
@@ -114,6 +121,18 @@ export function createAppContainer(
       now,
     );
 
+  const isActiveOrganizationMember = async (
+    organizationId: OrganizationId,
+    userId: UserId,
+  ): Promise<boolean> => {
+    const member =
+      await resolvedRepositories.organizations.organizationMembers.findByOrganizationAndUser(
+        organizationId,
+        userId,
+      );
+    return member !== null && member.status === MEMBERSHIP_STATUSES.ACTIVE;
+  };
+
   const resolvedServices: AppServicesRegistry =
     options.services ??
     Object.freeze({
@@ -127,6 +146,7 @@ export function createAppContainer(
         passwordVerifier: resolvedPasswordVerifier,
         ephemeralSessionPointer: resolvedEphemeralSessionPointer,
         seedDemoOrganization,
+        isActiveOrganizationMember,
         logger: resolvedLogger,
         ...(options.now !== undefined ? { now: options.now } : {}),
         ...(options.generateUuid !== undefined ? { generateUuid: options.generateUuid } : {}),
@@ -136,6 +156,7 @@ export function createAppContainer(
         auditEvents: resolvedRepositories.audit.auditEvents,
         transactionPort: resolvedTransactionPort,
         eventBus: resolvedEventBus,
+        isActiveOrganizationMember,
         logger: resolvedLogger,
         ...(options.now !== undefined ? { now: options.now } : {}),
         ...(options.generateUuid !== undefined ? { generateUuid: options.generateUuid } : {}),

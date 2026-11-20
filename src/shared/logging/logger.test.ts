@@ -28,6 +28,8 @@ describe('redactSensitiveData and isSensitiveKey', () => {
     input.private_key = 'pem';
     input.access_token = 'at';
     input.refresh_token = 'rt';
+    input.salt = 'random-salt-123';
+    input.passwordSalt = 'pwd-salt-456';
     input.userCpf = '000.000.000-00';
 
     const redacted = redactSensitiveData(input) as Record<string, unknown>;

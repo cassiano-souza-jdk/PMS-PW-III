@@ -454,5 +454,65 @@ describe('AuthService & UserService Integration (IndexedDB + InMemoryEphemeralSe
         }),
       ).rejects.toThrowError(ValidationError);
     });
+
+    it('não grava AuditEvent em organização alheia quando activeOrganizationId não possui vínculo ACTIVE do ator', async () => {
+      const owner = await container.services.auth.registerUser({
+        email: 'owner.audit@pms.local',
+        password: 'SenhaOwner!2026',
+        displayName: 'Owner Org Alheia',
+        acceptTerms: true,
+      });
+      const foreignOrg = await container.services.organizations.createOrganization(owner.user.id, {
+        name: 'Org Alheia Isolada',
+        slug: 'org-alheia-isolada',
+      });
+
+      const outsider = await container.services.auth.registerUser({
+        email: 'outsider.audit@pms.local',
+        password: 'SenhaOutsider!2026',
+        displayName: 'Usuario Externo',
+        acceptTerms: true,
+      });
+
+      const outsiderSecondSession = await container.services.auth.loginWithPassword({
+        email: 'outsider.audit@pms.local',
+        password: 'SenhaOutsider!2026',
+        persistent: true,
+        deviceLabel: 'Outro Dispositivo',
+      });
+
+      const auditBefore = await container.repositories.audit.auditEvents.listByOrganization(
+        foreignOrg.organization.id,
+        { page: 1, pageSize: 50 },
+      );
+
+      // 1. updateMyProfile passando activeOrganizationId alheia
+      const updated = await container.services.users.updateMyProfile(outsider.user.id, {
+        displayName: 'Usuario Externo Atualizado',
+        activeOrganizationId: foreignOrg.organization.id,
+      });
+      expect(updated.displayName).toBe('Usuario Externo Atualizado');
+
+      // 2. revokeSession passando activeOrganizationId alheia
+      await container.services.auth.revokeSession({
+        actorUserId: outsider.user.id,
+        sessionId: outsiderSecondSession.session.id,
+        activeOrganizationId: foreignOrg.organization.id,
+      });
+
+      // 3. revokeAllSessions passando activeOrganizationId alheia
+      await container.services.auth.revokeAllSessions({
+        actorUserId: outsider.user.id,
+        activeOrganizationId: foreignOrg.organization.id,
+      });
+
+      const auditAfter = await container.repositories.audit.auditEvents.listByOrganization(
+        foreignOrg.organization.id,
+        { page: 1, pageSize: 50 },
+      );
+
+      expect(auditAfter.total).toBe(auditBefore.total);
+      expect(auditAfter.items.some((event) => event.actorId === outsider.user.id)).toBe(false);
+    });
   });
 });

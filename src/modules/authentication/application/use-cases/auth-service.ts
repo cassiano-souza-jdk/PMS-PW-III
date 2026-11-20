@@ -100,6 +100,10 @@ export interface AuthServiceDependencies {
   readonly passwordVerifier: PasswordVerifierPort;
   readonly ephemeralSessionPointer: EphemeralSessionPointerPort;
   readonly seedDemoOrganization: (now?: IsoDateTime) => Promise<DemoSeedHookResult>;
+  readonly isActiveOrganizationMember?: (
+    organizationId: OrganizationId,
+    userId: UserId,
+  ) => Promise<boolean>;
   readonly logger?: Logger;
   readonly now?: () => IsoDateTime;
   readonly generateUuid?: () => string;
@@ -261,6 +265,22 @@ export class AuthService {
     } else {
       this.deps.ephemeralSessionPointer.clear();
     }
+  }
+
+  private async resolveVerifiedAuditOrganizationId(
+    organizationId: OrganizationId | undefined,
+    actorUserId: UserId,
+  ): Promise<OrganizationId | undefined> {
+    if (organizationId === undefined) {
+      return undefined;
+    }
+
+    if (this.deps.isActiveOrganizationMember === undefined) {
+      return organizationId;
+    }
+
+    const isActiveMember = await this.deps.isActiveOrganizationMember(organizationId, actorUserId);
+    return isActiveMember ? organizationId : undefined;
   }
 
   async registerUser(input: RegisterUserInput): Promise<AuthSessionResult> {
@@ -600,18 +620,23 @@ export class AuthService {
       });
     }
 
+    const verifiedAuditOrganizationId = await this.resolveVerifiedAuditOrganizationId(
+      input.activeOrganizationId,
+      actorUserId,
+    );
+
     const resources =
-      input.activeOrganizationId !== undefined
+      verifiedAuditOrganizationId !== undefined
         ? ([TRANSACTION_RESOURCES.USER_SESSIONS, TRANSACTION_RESOURCES.AUDIT_EVENTS] as const)
         : ([TRANSACTION_RESOURCES.USER_SESSIONS] as const);
 
     await this.deps.transactionPort.run(resources, async () => {
       await this.deps.userSessions.revokeById(sessionId, now, reason);
 
-      if (input.activeOrganizationId !== undefined) {
+      if (verifiedAuditOrganizationId !== undefined) {
         const auditEvent: AuditEvent = {
           id: asAuditEventId(this.nextUuid()),
-          organizationId: input.activeOrganizationId,
+          organizationId: verifiedAuditOrganizationId,
           actorId: actorUserId,
           occurredAt: now,
           category: AUDIT_CATEGORIES.AUTH,
@@ -633,8 +658,8 @@ export class AuthService {
           eventId: asEventId(this.nextUuid()),
           eventType: 'auth.session.revoked',
           occurredAt: now,
-          ...(input.activeOrganizationId !== undefined
-            ? { organizationId: input.activeOrganizationId }
+          ...(verifiedAuditOrganizationId !== undefined
+            ? { organizationId: verifiedAuditOrganizationId }
             : {}),
           actorId: actorUserId,
           correlationId,
@@ -659,18 +684,23 @@ export class AuthService {
     const correlationId = this.resolveCorrelationId(input.correlationId);
     const reason = input.reason?.trim() || 'REVOKE_ALL_SESSIONS';
 
+    const verifiedAuditOrganizationId = await this.resolveVerifiedAuditOrganizationId(
+      input.activeOrganizationId,
+      actorUserId,
+    );
+
     const resources =
-      input.activeOrganizationId !== undefined
+      verifiedAuditOrganizationId !== undefined
         ? ([TRANSACTION_RESOURCES.USER_SESSIONS, TRANSACTION_RESOURCES.AUDIT_EVENTS] as const)
         : ([TRANSACTION_RESOURCES.USER_SESSIONS] as const);
 
     await this.deps.transactionPort.run(resources, async () => {
       await this.deps.userSessions.revokeAllByUserId(actorUserId, now, reason);
 
-      if (input.activeOrganizationId !== undefined) {
+      if (verifiedAuditOrganizationId !== undefined) {
         const auditEvent: AuditEvent = {
           id: asAuditEventId(this.nextUuid()),
-          organizationId: input.activeOrganizationId,
+          organizationId: verifiedAuditOrganizationId,
           actorId: actorUserId,
           occurredAt: now,
           category: AUDIT_CATEGORIES.AUTH,
@@ -692,8 +722,8 @@ export class AuthService {
           eventId: asEventId(this.nextUuid()),
           eventType: 'auth.sessions.revoked_all',
           occurredAt: now,
-          ...(input.activeOrganizationId !== undefined
-            ? { organizationId: input.activeOrganizationId }
+          ...(verifiedAuditOrganizationId !== undefined
+            ? { organizationId: verifiedAuditOrganizationId }
             : {}),
           actorId: actorUserId,
           correlationId,
