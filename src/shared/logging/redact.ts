@@ -34,6 +34,7 @@ const SENSITIVE_SINGLE_TOKENS: ReadonlySet<string> = new Set([
   'cookies',
   'credential',
   'credentials',
+  'salt',
   'cpf',
   'ssn',
 ]);
