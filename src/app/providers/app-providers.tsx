@@ -5,7 +5,10 @@ import {
   type AppCompositionContainer,
 } from '@/app/composition';
 import { ErrorBoundary } from '@/shared/ui';
+import { AuthProvider } from './auth-provider';
 import { AppIntlProvider } from './intl-provider';
+import { OrganizationProvider } from './organization-provider';
+import { PermissionProvider } from './permission-provider';
 import { ThemeProvider } from './theme-provider';
 
 export interface AppProvidersProps {
@@ -19,7 +22,13 @@ function ProvidersWithComposition({ children }: { readonly children: ReactNode }
   return (
     <ThemeProvider>
       <AppIntlProvider>
-        <ErrorBoundary logger={logger}>{children}</ErrorBoundary>
+        <ErrorBoundary logger={logger}>
+          <AuthProvider>
+            <OrganizationProvider>
+              <PermissionProvider>{children}</PermissionProvider>
+            </OrganizationProvider>
+          </AuthProvider>
+        </ErrorBoundary>
       </AppIntlProvider>
     </ThemeProvider>
   );
