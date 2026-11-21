@@ -28,9 +28,14 @@ export interface TaskRepositoryPort {
     projectId: ProjectId,
     options?: { readonly includeDeleted?: boolean },
   ): Promise<readonly Task[]>;
-  listByColumn(organizationId: OrganizationId, columnId: BoardColumnId): Promise<readonly Task[]>;
+  listByColumn(
+    organizationId: OrganizationId,
+    columnId: BoardColumnId,
+    options?: { readonly includeDeleted?: boolean },
+  ): Promise<readonly Task[]>;
   listByAssignee(organizationId: OrganizationId, assigneeId: UserId): Promise<readonly Task[]>;
   save(task: Task): Promise<void>;
+  saveMany(organizationId: OrganizationId, tasks: readonly Task[]): Promise<void>;
 }
 
 export interface TaskParticipantRepositoryPort {

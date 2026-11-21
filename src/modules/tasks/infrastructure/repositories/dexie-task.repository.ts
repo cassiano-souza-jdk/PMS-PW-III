@@ -14,6 +14,7 @@ import {
   deleteOrganizationScopedById,
   filterSoftDeleted,
   findOrganizationScopedById,
+  saveManyOrganizationScopedEntities,
   saveOrganizationScopedEntity,
   withPersistenceErrorHandling,
   type PmsDatabase,
@@ -81,6 +82,7 @@ export class DexieTaskRepository implements TaskRepositoryPort {
   async listByColumn(
     organizationId: OrganizationId,
     columnId: BoardColumnId,
+    options?: { readonly includeDeleted?: boolean },
   ): Promise<readonly Task[]> {
     return withPersistenceErrorHandling('Task.listByColumn', async () => {
       const records = await this.table
@@ -88,7 +90,7 @@ export class DexieTaskRepository implements TaskRepositoryPort {
         .equals([organizationId, columnId])
         .toArray();
 
-      const filtered = filterSoftDeleted(records);
+      const filtered = filterSoftDeleted(records, options?.includeDeleted);
       return filtered.sort((a, b) => a.order - b.order || a.id.localeCompare(b.id));
     });
   }
@@ -110,6 +112,10 @@ export class DexieTaskRepository implements TaskRepositoryPort {
 
   async save(task: Task): Promise<void> {
     await saveOrganizationScopedEntity(this.table, task, 'Task');
+  }
+
+  async saveMany(organizationId: OrganizationId, tasks: readonly Task[]): Promise<void> {
+    await saveManyOrganizationScopedEntities(this.table, organizationId, tasks, 'Task');
   }
 }
 

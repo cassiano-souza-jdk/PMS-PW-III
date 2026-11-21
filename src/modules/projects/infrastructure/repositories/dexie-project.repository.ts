@@ -8,6 +8,7 @@ import {
 import {
   filterSoftDeleted,
   findOrganizationScopedById,
+  saveManyOrganizationScopedEntities,
   saveOrganizationScopedEntity,
   withPersistenceErrorHandling,
   type PmsDatabase,
@@ -122,5 +123,9 @@ export class DexieProjectMemberRepository implements ProjectMemberRepositoryPort
 
   async save(member: ProjectMember): Promise<void> {
     await saveOrganizationScopedEntity(this.table, member, 'ProjectMember');
+  }
+
+  async saveMany(organizationId: OrganizationId, members: readonly ProjectMember[]): Promise<void> {
+    await saveManyOrganizationScopedEntities(this.table, organizationId, members, 'ProjectMember');
   }
 }

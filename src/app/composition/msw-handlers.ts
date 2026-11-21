@@ -1,5 +1,4 @@
 import { delay, http, HttpResponse, type HttpHandler } from 'msw';
-import { AUDIT_CATEGORIES, AUDIT_RESULTS, type AuditEvent } from '@/modules/audit';
 import {
   AuthService,
   asSessionId,
@@ -14,11 +13,8 @@ import {
   PERMISSION_CODES,
   asDenyRuleId,
   assertAuthorized,
-  type AuthorizationActor,
-  type AuthorizationResource,
   type CreateExplicitDenyRuleInput,
   type GrantPermissionInput,
-  type PermissionCode,
 } from '@/modules/authorization';
 import { DEMO_SEED_VERSION } from '@/modules/demo';
 import {
@@ -27,15 +23,23 @@ import {
   type CreateInvitationInput,
 } from '@/modules/invitations';
 import {
+  KanbanService,
+  type CreateColumnInput,
+  type CreateQuickCardInput,
+  type MoveCardInput,
+  type UpdateColumnInput,
+} from '@/modules/kanban';
+import {
   OrganizationService,
   type CreateOrganizationInput,
   type UpdateOrganizationInput,
 } from '@/modules/organizations';
 import {
-  PROJECT_MEMBER_ROLES,
-  PROJECT_STATUSES,
-  asProjectMemberId,
-  type Project,
+  ProjectService,
+  type CreateProjectInput,
+  type ProjectMemberRole,
+  type TransferProjectTeamInput,
+  type UpdateProjectInput,
 } from '@/modules/projects';
 import { TeamService, type CreateTeamInput, type UpdateTeamInput } from '@/modules/teams';
 import { UserService, type UpdateMyProfileInput } from '@/modules/users';
@@ -55,25 +59,22 @@ import {
 } from '@/shared/http';
 import {
   MEMBERSHIP_STATUSES,
-  TRANSACTION_RESOURCES,
-  asAuditEventId,
+  asBoardColumnId,
   asCorrelationId,
-  asEntityId,
-  asEventId,
   asGrantId,
   asIsoDateTime,
   asOrganizationId,
   asProjectId,
+  asTaskId,
   asTeamId,
   asUserId,
-  createDomainEvent,
+  isSoftDeleted,
   isUuid,
+  type BoardColumnId,
   type DomainEventPublisherPort,
   type IsoDateTime,
   type OrganizationId,
   type OrganizationRole,
-  type ProjectId,
-  type TeamId,
   type TransactionPort,
   type UserId,
 } from '@/shared/kernel';
@@ -88,6 +89,10 @@ import {
   ensureDemoOrganizationSeeded,
   type DemoOrganizationSeedResult,
 } from './demo-seed';
+import {
+  createProjectBoardInitializerAdapter,
+  createProjectTeamLookupAdapter,
+} from './project-ports-adapter';
 import type { AppRepositoriesRegistry } from './repositories-registry';
 
 export interface MswCompositionDependencies {
@@ -183,95 +188,6 @@ function buildErrorResponse(
       [HTTP_HEADERS.CORRELATION_ID]: correlationId,
     },
   });
-}
-
-async function resolveAuthorizationActor(
-  deps: MswCompositionDependencies,
-  request: Request,
-  targetOrganizationId: OrganizationId,
-  now: IsoDateTime,
-): Promise<{ readonly actor: AuthorizationActor; readonly userId: UserId }> {
-  const rawActorId = request.headers.get(HTTP_HEADERS.ACTOR_USER_ID)?.trim();
-  if (!rawActorId) {
-    throw new AuthenticationError(
-      'Missing required x-actor-user-id header for authenticated endpoint.',
-    );
-  }
-
-  const userId = asUserId(rawActorId, 'x-actor-user-id');
-
-  const [membership, projectMemberships, orgTeams, grants, explicitDenies] = await Promise.all([
-    deps.repositories.organizations.organizationMembers.findByOrganizationAndUser(
-      targetOrganizationId,
-      userId,
-    ),
-    deps.repositories.projects.projectMembers.listByUser(targetOrganizationId, userId),
-    deps.repositories.teams.teams.listByOrganization(targetOrganizationId, {
-      includeArchived: true,
-      includeDeleted: true,
-    }),
-    deps.repositories.authorization.permissionGrants.listActiveByGrantee(
-      targetOrganizationId,
-      userId,
-      now,
-    ),
-    deps.repositories.authorization.explicitDenyRules.listActiveByTargetUser(
-      targetOrganizationId,
-      userId,
-      now,
-    ),
-  ]);
-
-  const activeProjectMemberships = projectMemberships.filter((pm) => pm.removedAt === undefined);
-  const managedProjectIds: ProjectId[] = activeProjectMemberships
-    .filter((pm) => pm.projectRole === PROJECT_MEMBER_ROLES.MANAGER)
-    .map((pm) => pm.projectId);
-  const participatedProjectIds: ProjectId[] = activeProjectMemberships.map((pm) => pm.projectId);
-
-  const managedTeamIds: TeamId[] = orgTeams
-    .filter((team) => team.managerUserIds.includes(userId))
-    .map((team) => team.id);
-
-  const actor: AuthorizationActor = {
-    isAuthenticated: true,
-    userId,
-    ...(membership !== null
-      ? {
-          organizationMembership: {
-            organizationId: membership.organizationId,
-            role: membership.role,
-            status: membership.status,
-          },
-        }
-      : {}),
-    managedProjectIds,
-    participatedProjectIds,
-    managedTeamIds,
-    grants,
-    explicitDenies,
-  };
-
-  return { actor, userId };
-}
-
-async function authorizeOrThrow(
-  deps: MswCompositionDependencies,
-  request: Request,
-  organizationId: OrganizationId,
-  action: PermissionCode,
-  resource: AuthorizationResource,
-  now: IsoDateTime,
-): Promise<{ readonly actor: AuthorizationActor; readonly userId: UserId }> {
-  const { actor, userId } = await resolveAuthorizationActor(deps, request, organizationId, now);
-
-  assertAuthorized({
-    actor,
-    action,
-    resource,
-    context: { now },
-  });
-
-  return { actor, userId };
 }
 
 /**
@@ -427,6 +343,45 @@ function resolveMswServices(deps: MswCompositionDependencies): AppServicesRegist
       projects: deps.repositories.projects.projects,
       organizationMembers: deps.repositories.organizations.organizationMembers,
       users: deps.repositories.users.users,
+      permissionGrants: deps.repositories.authorization.permissionGrants,
+      explicitDenyRules: deps.repositories.authorization.explicitDenyRules,
+      auditEvents: deps.repositories.audit.auditEvents,
+      transactionPort: deps.transactionPort,
+      eventBus: deps.eventBus,
+      ...(deps.now !== undefined ? { now: deps.now } : {}),
+      ...(deps.generateUuid !== undefined ? { generateUuid: deps.generateUuid } : {}),
+    }),
+    projects: new ProjectService({
+      projects: deps.repositories.projects.projects,
+      projectMembers: deps.repositories.projects.projectMembers,
+      tasks: deps.repositories.tasks.tasks,
+      taskParticipants: deps.repositories.tasks.taskParticipants,
+      organizationMembers: deps.repositories.organizations.organizationMembers,
+      users: deps.repositories.users.users,
+      permissionGrants: deps.repositories.authorization.permissionGrants,
+      explicitDenyRules: deps.repositories.authorization.explicitDenyRules,
+      auditEvents: deps.repositories.audit.auditEvents,
+      teamLookup: createProjectTeamLookupAdapter(deps.repositories),
+      boardInitializer: createProjectBoardInitializerAdapter(deps.repositories),
+      transactionPort: deps.transactionPort,
+      eventBus: deps.eventBus,
+      ...(deps.now !== undefined ? { now: deps.now } : {}),
+      ...(deps.generateUuid !== undefined ? { generateUuid: deps.generateUuid } : {}),
+    }),
+    kanban: new KanbanService({
+      projects: deps.repositories.projects.projects,
+      projectMembers: deps.repositories.projects.projectMembers,
+      projectBoards: deps.repositories.kanban.projectBoards,
+      boardColumns: deps.repositories.kanban.boardColumns,
+      tasks: deps.repositories.tasks.tasks,
+      taskParticipants: deps.repositories.tasks.taskParticipants,
+      subtasks: deps.repositories.tasks.subtasks,
+      taskDependencies: deps.repositories.dependencies.taskDependencies,
+      impediments: deps.repositories.impediments.impediments,
+      taskPauses: deps.repositories.tasks.taskPauses,
+      taskExecutionCycles: deps.repositories.tasks.taskExecutionCycles,
+      organizationMembers: deps.repositories.organizations.organizationMembers,
+      organizationSettings: deps.repositories.settings.organizationSettings,
       permissionGrants: deps.repositories.authorization.permissionGrants,
       explicitDenyRules: deps.repositories.authorization.explicitDenyRules,
       auditEvents: deps.repositories.audit.auditEvents,
@@ -1277,247 +1232,645 @@ export function createMswHandlers(deps: MswCompositionDependencies): readonly Ht
       }),
     ),
 
+    // -------------------------------------------------------------------------
+    // Phase 06 — Projects & Participants (delegating strictly to ProjectService)
+    // -------------------------------------------------------------------------
     http.get(
       '*/api/v1/organizations/:organizationId/projects',
       withSimulatedEndpoint(deps, async ({ request, params, correlationId, now }) => {
+        const actorUserId = requireActorUserId(request);
         const organizationId = asOrganizationId(
           String(params.organizationId ?? ''),
           'organizationId',
         );
+        const url = new URL(request.url);
+        const includeArchived = url.searchParams.get('includeArchived') === 'true';
 
-        const { actor } = await resolveAuthorizationActor(deps, request, organizationId, now);
-
-        const allProjects =
-          await deps.repositories.projects.projects.listByOrganization(organizationId);
-
-        if (allProjects.length === 0) {
-          // Verify basic membership/auth even when list is empty
-          assertAuthorized({
-            actor,
-            action: PERMISSION_CODES.ORGANIZATION_VIEW,
-            resource: {
-              kind: 'ORGANIZATION',
-              id: asEntityId(organizationId),
-              exists: true,
-              organizationId,
-            },
-            context: { now },
-          });
-          return buildSuccessResponse([], correlationId, now, 200);
-        }
-
-        const visibleProjects: Project[] = [];
-        for (const project of allProjects) {
-          try {
-            assertAuthorized({
-              actor,
-              action: PERMISSION_CODES.PROJECT_VIEW,
-              resource: {
-                kind: 'PROJECT',
-                id: asEntityId(project.id),
-                exists: true,
-                organizationId: project.organizationId,
-                projectId: project.id,
-                teamId: project.teamId,
-                ownerUserId: project.ownerUserId,
-                deletedAt: project.deletedAt,
-                archivedAt: project.archivedAt,
-              },
-              context: { now },
-            });
-            visibleProjects.push(project);
-          } catch {
-            // Filter out projects outside the actor's authorized scope
-          }
-        }
-
-        return buildSuccessResponse(visibleProjects, correlationId, now, 200);
+        const projects = await services.projects.listProjects(actorUserId, organizationId, {
+          includeArchived,
+        });
+        return buildSuccessResponse(projects, correlationId, now, 200);
       }),
     ),
 
     http.post(
       '*/api/v1/organizations/:organizationId/projects',
       withSimulatedEndpoint(deps, async ({ request, params, correlationId, now, nextUuid }) => {
+        const actorUserId = requireActorUserId(request);
         const organizationId = asOrganizationId(
           String(params.organizationId ?? ''),
           'organizationId',
         );
-
-        const rawBody = (await request
-          .json()
-          .catch(() => null)) as CreateProjectRequestPayload | null;
-
-        if (!rawBody || typeof rawBody.name !== 'string' || rawBody.name.trim().length === 0) {
-          throw new ValidationError('Project "name" is required and must be a non-empty string.', {
-            details: { field: 'name' },
-          });
+        const rawBody = (await request.json().catch(() => null)) as CreateProjectInput | null;
+        if (!rawBody || typeof rawBody !== 'object') {
+          throw new ValidationError('Invalid JSON body for project creation.');
         }
 
-        const teamId =
-          rawBody.teamId !== undefined ? asTeamId(rawBody.teamId, 'teamId') : undefined;
+        const created = await services.projects.createProject(actorUserId, organizationId, {
+          ...rawBody,
+          correlationId: asCorrelationId(isUuid(correlationId) ? correlationId : nextUuid()),
+        });
 
-        const { userId } = await authorizeOrThrow(
-          deps,
-          request,
-          organizationId,
-          PERMISSION_CODES.PROJECT_CREATE,
-          {
-            kind: 'PROJECT',
-            exists: true,
-            organizationId,
-            ...(teamId !== undefined ? { teamId } : {}),
-          },
-          now,
-        );
-
-        const projectId = asProjectId(rawBody.id ?? nextUuid(), 'projectId');
-        const ownerUserId =
-          rawBody.ownerUserId !== undefined ? asUserId(rawBody.ownerUserId, 'ownerUserId') : userId;
-        const inactivityThresholdDays =
-          rawBody.inactivityThresholdDays !== undefined ? rawBody.inactivityThresholdDays : 7;
-
-        if (!Number.isInteger(inactivityThresholdDays) || inactivityThresholdDays < 1) {
-          throw new ValidationError('Project "inactivityThresholdDays" must be an integer >= 1.', {
-            details: { field: 'inactivityThresholdDays' },
-          });
-        }
-
-        const newProject: Project = {
-          id: projectId,
-          organizationId,
-          ...(teamId !== undefined ? { teamId } : {}),
-          name: rawBody.name.trim(),
-          ...(rawBody.description !== undefined ? { description: rawBody.description } : {}),
-          status: PROJECT_STATUSES.ACTIVE,
-          ownerUserId,
-          inactivityThresholdDays,
-          createdByUserId: userId,
-          createdAt: now,
-          updatedAt: now,
-        };
-
-        const correlationUuid = asCorrelationId(isUuid(correlationId) ? correlationId : nextUuid());
-
-        // Persist inside a Dexie transaction and emit post-commit event BEFORE returning HTTP 201
-        await deps.transactionPort.run(
-          [
-            TRANSACTION_RESOURCES.PROJECTS,
-            TRANSACTION_RESOURCES.PROJECT_MEMBERS,
-            TRANSACTION_RESOURCES.AUDIT_EVENTS,
-          ],
-          async () => {
-            await deps.repositories.projects.projects.save(newProject);
-            await deps.repositories.projects.projectMembers.save({
-              id: asProjectMemberId(nextUuid()),
-              organizationId,
-              projectId: newProject.id,
-              userId: ownerUserId,
-              projectRole: PROJECT_MEMBER_ROLES.MANAGER,
-              joinedAt: now,
-            });
-
-            const auditEvent: AuditEvent = {
-              id: asAuditEventId(nextUuid()),
-              organizationId,
-              actorId: userId,
-              projectId: newProject.id,
-              occurredAt: now,
-              category: AUDIT_CATEGORIES.PROJECT,
-              eventType: 'project.created',
-              resourceType: 'Project',
-              resourceId: newProject.id,
-              after: {
-                id: newProject.id,
-                name: newProject.name,
-                status: newProject.status,
-              },
-              result: AUDIT_RESULTS.SUCCESS,
-              correlationId: correlationUuid,
-            };
-            await deps.repositories.audit.auditEvents.append(auditEvent);
-
-            await deps.eventBus.publish(
-              createDomainEvent({
-                eventId: asEventId(nextUuid()),
-                eventType: 'project.created',
-                occurredAt: now,
-                organizationId,
-                actorId: userId,
-                correlationId: correlationUuid,
-                aggregateType: 'Project',
-                aggregateId: newProject.id,
-                payload: {
-                  projectId: newProject.id,
-                  name: newProject.name,
-                },
-              }),
-            );
-          },
-        );
-
-        return buildSuccessResponse(newProject, correlationId, now, 201);
+        return buildSuccessResponse(created, correlationId, now, 201);
       }),
     ),
 
     http.get(
-      '*/api/v1/organizations/:organizationId/projects/:projectId/tasks',
+      '*/api/v1/organizations/:organizationId/projects/:projectId',
       withSimulatedEndpoint(deps, async ({ request, params, correlationId, now }) => {
+        const actorUserId = requireActorUserId(request);
         const organizationId = asOrganizationId(
           String(params.organizationId ?? ''),
           'organizationId',
         );
         const projectId = asProjectId(String(params.projectId ?? ''), 'projectId');
 
-        const project = await deps.repositories.projects.projects.findById(
+        const details = await services.projects.getProjectDetails(
+          actorUserId,
           organizationId,
           projectId,
         );
+        return buildSuccessResponse(details, correlationId, now, 200);
+      }),
+    ),
 
-        await authorizeOrThrow(
-          deps,
-          request,
+    http.patch(
+      '*/api/v1/organizations/:organizationId/projects/:projectId',
+      withSimulatedEndpoint(deps, async ({ request, params, correlationId, now, nextUuid }) => {
+        const actorUserId = requireActorUserId(request);
+        const organizationId = asOrganizationId(
+          String(params.organizationId ?? ''),
+          'organizationId',
+        );
+        const projectId = asProjectId(String(params.projectId ?? ''), 'projectId');
+        const rawBody = (await request.json().catch(() => null)) as UpdateProjectInput | null;
+        if (!rawBody || typeof rawBody !== 'object') {
+          throw new ValidationError('Invalid JSON body for project update.');
+        }
+
+        const updated = await services.projects.updateProject(
+          actorUserId,
           organizationId,
-          PERMISSION_CODES.PROJECT_VIEW,
+          projectId,
           {
-            kind: 'PROJECT',
-            id: asEntityId(projectId),
-            exists: project !== null,
-            organizationId,
-            projectId,
-            teamId: project?.teamId,
-            ownerUserId: project?.ownerUserId,
-            deletedAt: project?.deletedAt,
-            archivedAt: project?.archivedAt,
+            ...rawBody,
+            correlationId: asCorrelationId(isUuid(correlationId) ? correlationId : nextUuid()),
           },
-          now,
         );
 
-        const tasks = await deps.repositories.tasks.tasks.listByProject(organizationId, projectId);
+        return buildSuccessResponse(updated, correlationId, now, 200);
+      }),
+    ),
 
-        return buildSuccessResponse(tasks, correlationId, now, 200);
+    http.delete(
+      '*/api/v1/organizations/:organizationId/projects/:projectId',
+      withSimulatedEndpoint(deps, async ({ request, params, correlationId, now, nextUuid }) => {
+        const actorUserId = requireActorUserId(request);
+        const organizationId = asOrganizationId(
+          String(params.organizationId ?? ''),
+          'organizationId',
+        );
+        const projectId = asProjectId(String(params.projectId ?? ''), 'projectId');
+        const url = new URL(request.url);
+        const rawBody = (await request.json().catch(() => null)) as {
+          readonly reason?: string;
+        } | null;
+        const reason = rawBody?.reason ?? url.searchParams.get('reason') ?? undefined;
+
+        const deleted = await services.projects.deleteProject(
+          actorUserId,
+          organizationId,
+          projectId,
+          {
+            ...(reason !== undefined ? { reason } : {}),
+            correlationId: asCorrelationId(isUuid(correlationId) ? correlationId : nextUuid()),
+          },
+        );
+
+        return buildSuccessResponse(deleted, correlationId, now, 200);
+      }),
+    ),
+
+    http.post(
+      '*/api/v1/organizations/:organizationId/projects/:projectId/transfer',
+      withSimulatedEndpoint(deps, async ({ request, params, correlationId, now, nextUuid }) => {
+        const actorUserId = requireActorUserId(request);
+        const organizationId = asOrganizationId(
+          String(params.organizationId ?? ''),
+          'organizationId',
+        );
+        const projectId = asProjectId(String(params.projectId ?? ''), 'projectId');
+        const rawBody = (await request.json().catch(() => null)) as
+          (Partial<TransferProjectTeamInput> & Record<string, unknown>) | null;
+
+        if (
+          !rawBody ||
+          typeof rawBody !== 'object' ||
+          (rawBody.targetTeamId !== null && typeof rawBody.targetTeamId !== 'string')
+        ) {
+          throw new ValidationError(
+            'Field "targetTeamId" (UUID string or null) is required to transfer project team.',
+          );
+        }
+
+        const transferred = await services.projects.transferProjectTeam(
+          actorUserId,
+          organizationId,
+          projectId,
+          {
+            targetTeamId: rawBody.targetTeamId as TransferProjectTeamInput['targetTeamId'],
+            ...(typeof rawBody.reason === 'string' ? { reason: rawBody.reason } : {}),
+            correlationId: asCorrelationId(isUuid(correlationId) ? correlationId : nextUuid()),
+          },
+        );
+
+        return buildSuccessResponse(transferred, correlationId, now, 200);
+      }),
+    ),
+
+    http.post(
+      '*/api/v1/organizations/:organizationId/projects/:projectId/archive',
+      withSimulatedEndpoint(deps, async ({ request, params, correlationId, now, nextUuid }) => {
+        const actorUserId = requireActorUserId(request);
+        const organizationId = asOrganizationId(
+          String(params.organizationId ?? ''),
+          'organizationId',
+        );
+        const projectId = asProjectId(String(params.projectId ?? ''), 'projectId');
+        const rawBody = (await request.json().catch(() => null)) as {
+          readonly reason?: string;
+        } | null;
+
+        const archived = await services.projects.archiveProject(
+          actorUserId,
+          organizationId,
+          projectId,
+          {
+            ...(rawBody?.reason !== undefined ? { reason: rawBody.reason } : {}),
+            correlationId: asCorrelationId(isUuid(correlationId) ? correlationId : nextUuid()),
+          },
+        );
+
+        return buildSuccessResponse(archived, correlationId, now, 200);
+      }),
+    ),
+
+    http.post(
+      '*/api/v1/organizations/:organizationId/projects/:projectId/restore',
+      withSimulatedEndpoint(deps, async ({ request, params, correlationId, now, nextUuid }) => {
+        const actorUserId = requireActorUserId(request);
+        const organizationId = asOrganizationId(
+          String(params.organizationId ?? ''),
+          'organizationId',
+        );
+        const projectId = asProjectId(String(params.projectId ?? ''), 'projectId');
+        const rawBody = (await request.json().catch(() => null)) as {
+          readonly reason?: string;
+        } | null;
+
+        const restored = await services.projects.restoreProject(
+          actorUserId,
+          organizationId,
+          projectId,
+          {
+            ...(rawBody?.reason !== undefined ? { reason: rawBody.reason } : {}),
+            correlationId: asCorrelationId(isUuid(correlationId) ? correlationId : nextUuid()),
+          },
+        );
+
+        return buildSuccessResponse(restored, correlationId, now, 200);
+      }),
+    ),
+
+    http.post(
+      '*/api/v1/organizations/:organizationId/projects/:projectId/participants',
+      withSimulatedEndpoint(deps, async ({ request, params, correlationId, now, nextUuid }) => {
+        const actorUserId = requireActorUserId(request);
+        const organizationId = asOrganizationId(
+          String(params.organizationId ?? ''),
+          'organizationId',
+        );
+        const projectId = asProjectId(String(params.projectId ?? ''), 'projectId');
+        const rawBody = (await request.json().catch(() => null)) as {
+          readonly userId?: string;
+          readonly role?: ProjectMemberRole;
+        } | null;
+
+        if (!rawBody || typeof rawBody.userId !== 'string') {
+          throw new ValidationError('Field "userId" is required to add a project participant.');
+        }
+
+        const participant = await services.projects.addProjectParticipant(
+          actorUserId,
+          organizationId,
+          projectId,
+          asUserId(rawBody.userId, 'userId'),
+          rawBody.role,
+          {
+            correlationId: asCorrelationId(isUuid(correlationId) ? correlationId : nextUuid()),
+          },
+        );
+
+        return buildSuccessResponse(participant, correlationId, now, 201);
+      }),
+    ),
+
+    http.patch(
+      '*/api/v1/organizations/:organizationId/projects/:projectId/participants/:userId',
+      withSimulatedEndpoint(deps, async ({ request, params, correlationId, now, nextUuid }) => {
+        const actorUserId = requireActorUserId(request);
+        const organizationId = asOrganizationId(
+          String(params.organizationId ?? ''),
+          'organizationId',
+        );
+        const projectId = asProjectId(String(params.projectId ?? ''), 'projectId');
+        const targetUserId = asUserId(String(params.userId ?? ''), 'userId');
+        const rawBody = (await request.json().catch(() => null)) as {
+          readonly role?: ProjectMemberRole;
+        } | null;
+
+        if (!rawBody || typeof rawBody.role !== 'string') {
+          throw new ValidationError('Field "role" is required to update project participant role.');
+        }
+
+        const updated = await services.projects.updateProjectParticipantRole(
+          actorUserId,
+          organizationId,
+          projectId,
+          targetUserId,
+          rawBody.role,
+          {
+            correlationId: asCorrelationId(isUuid(correlationId) ? correlationId : nextUuid()),
+          },
+        );
+
+        return buildSuccessResponse(updated, correlationId, now, 200);
+      }),
+    ),
+
+    http.delete(
+      '*/api/v1/organizations/:organizationId/projects/:projectId/participants/:userId',
+      withSimulatedEndpoint(deps, async ({ request, params, correlationId, now, nextUuid }) => {
+        const actorUserId = requireActorUserId(request);
+        const organizationId = asOrganizationId(
+          String(params.organizationId ?? ''),
+          'organizationId',
+        );
+        const projectId = asProjectId(String(params.projectId ?? ''), 'projectId');
+        const targetUserId = asUserId(String(params.userId ?? ''), 'userId');
+        const url = new URL(request.url);
+        const rawBody = (await request.json().catch(() => null)) as {
+          readonly reason?: string;
+        } | null;
+        const reason = rawBody?.reason ?? url.searchParams.get('reason') ?? undefined;
+
+        const removed = await services.projects.removeProjectParticipant(
+          actorUserId,
+          organizationId,
+          projectId,
+          targetUserId,
+          {
+            ...(reason !== undefined ? { reason } : {}),
+            correlationId: asCorrelationId(isUuid(correlationId) ? correlationId : nextUuid()),
+          },
+        );
+
+        return buildSuccessResponse(removed, correlationId, now, 200);
+      }),
+    ),
+
+    http.get(
+      '*/api/v1/organizations/:organizationId/projects/:projectId/export',
+      withSimulatedEndpoint(deps, async ({ request, params, correlationId, now, nextUuid }) => {
+        const actorUserId = requireActorUserId(request);
+        const organizationId = asOrganizationId(
+          String(params.organizationId ?? ''),
+          'organizationId',
+        );
+        const projectId = asProjectId(String(params.projectId ?? ''), 'projectId');
+
+        const exported = await services.projects.exportProjectData(
+          actorUserId,
+          organizationId,
+          projectId,
+          {
+            correlationId: asCorrelationId(isUuid(correlationId) ? correlationId : nextUuid()),
+          },
+        );
+
+        return buildSuccessResponse(exported, correlationId, now, 200);
+      }),
+    ),
+
+    // -------------------------------------------------------------------------
+    // Phase 06 — Kanban Board, Columns & Cards (delegating strictly to KanbanService)
+    // -------------------------------------------------------------------------
+    http.get(
+      '*/api/v1/organizations/:organizationId/projects/:projectId/tasks',
+      withSimulatedEndpoint(deps, async ({ request, params, correlationId, now }) => {
+        const actorUserId = requireActorUserId(request);
+        const organizationId = asOrganizationId(
+          String(params.organizationId ?? ''),
+          'organizationId',
+        );
+        const projectId = asProjectId(String(params.projectId ?? ''), 'projectId');
+
+        const board = await services.kanban.getProjectBoard(actorUserId, organizationId, projectId);
+        return buildSuccessResponse(
+          board.cards.map((card) => card.task),
+          correlationId,
+          now,
+          200,
+        );
+      }),
+    ),
+
+    http.get(
+      '*/api/v1/organizations/:organizationId/projects/:projectId/board',
+      withSimulatedEndpoint(deps, async ({ request, params, correlationId, now }) => {
+        const actorUserId = requireActorUserId(request);
+        const organizationId = asOrganizationId(
+          String(params.organizationId ?? ''),
+          'organizationId',
+        );
+        const projectId = asProjectId(String(params.projectId ?? ''), 'projectId');
+
+        const board = await services.kanban.getProjectBoard(actorUserId, organizationId, projectId);
+        return buildSuccessResponse(board, correlationId, now, 200);
+      }),
+    ),
+
+    http.post(
+      '*/api/v1/organizations/:organizationId/projects/:projectId/board/columns',
+      withSimulatedEndpoint(deps, async ({ request, params, correlationId, now, nextUuid }) => {
+        const actorUserId = requireActorUserId(request);
+        const organizationId = asOrganizationId(
+          String(params.organizationId ?? ''),
+          'organizationId',
+        );
+        const projectId = asProjectId(String(params.projectId ?? ''), 'projectId');
+        const rawBody = (await request.json().catch(() => null)) as CreateColumnInput | null;
+        if (!rawBody || typeof rawBody !== 'object') {
+          throw new ValidationError('Invalid JSON body for board column creation.');
+        }
+
+        const created = await services.kanban.createColumn(actorUserId, organizationId, projectId, {
+          ...rawBody,
+          correlationId: asCorrelationId(isUuid(correlationId) ? correlationId : nextUuid()),
+        });
+
+        return buildSuccessResponse(created, correlationId, now, 201);
+      }),
+    ),
+
+    http.post(
+      '*/api/v1/organizations/:organizationId/projects/:projectId/board/columns/reorder',
+      withSimulatedEndpoint(deps, async ({ request, params, correlationId, now, nextUuid }) => {
+        const actorUserId = requireActorUserId(request);
+        const organizationId = asOrganizationId(
+          String(params.organizationId ?? ''),
+          'organizationId',
+        );
+        const projectId = asProjectId(String(params.projectId ?? ''), 'projectId');
+        const rawBody = (await request.json().catch(() => null)) as {
+          readonly orderedColumnIds?: readonly BoardColumnId[];
+        } | null;
+
+        if (!rawBody || !Array.isArray(rawBody.orderedColumnIds)) {
+          throw new ValidationError(
+            'Field "orderedColumnIds" (array of column UUIDs) is required.',
+          );
+        }
+
+        const reordered = await services.kanban.reorderColumns(
+          actorUserId,
+          organizationId,
+          projectId,
+          rawBody.orderedColumnIds,
+          {
+            correlationId: asCorrelationId(isUuid(correlationId) ? correlationId : nextUuid()),
+          },
+        );
+
+        return buildSuccessResponse(reordered, correlationId, now, 200);
+      }),
+    ),
+
+    http.patch(
+      '*/api/v1/organizations/:organizationId/projects/:projectId/board/columns/:columnId',
+      withSimulatedEndpoint(deps, async ({ request, params, correlationId, now, nextUuid }) => {
+        const actorUserId = requireActorUserId(request);
+        const organizationId = asOrganizationId(
+          String(params.organizationId ?? ''),
+          'organizationId',
+        );
+        const projectId = asProjectId(String(params.projectId ?? ''), 'projectId');
+        const columnId = asBoardColumnId(String(params.columnId ?? ''), 'columnId');
+        const rawBody = (await request.json().catch(() => null)) as UpdateColumnInput | null;
+        if (!rawBody || typeof rawBody !== 'object') {
+          throw new ValidationError('Invalid JSON body for board column update.');
+        }
+
+        const updated = await services.kanban.updateColumn(
+          actorUserId,
+          organizationId,
+          projectId,
+          columnId,
+          {
+            ...rawBody,
+            correlationId: asCorrelationId(isUuid(correlationId) ? correlationId : nextUuid()),
+          },
+        );
+
+        return buildSuccessResponse(updated, correlationId, now, 200);
+      }),
+    ),
+
+    http.delete(
+      '*/api/v1/organizations/:organizationId/projects/:projectId/board/columns/:columnId',
+      withSimulatedEndpoint(deps, async ({ request, params, correlationId, now, nextUuid }) => {
+        const actorUserId = requireActorUserId(request);
+        const organizationId = asOrganizationId(
+          String(params.organizationId ?? ''),
+          'organizationId',
+        );
+        const projectId = asProjectId(String(params.projectId ?? ''), 'projectId');
+        const columnId = asBoardColumnId(String(params.columnId ?? ''), 'columnId');
+        const url = new URL(request.url);
+        const rawBody = (await request.json().catch(() => null)) as {
+          readonly migrationTargetColumnId?: string;
+        } | null;
+        const rawTargetId =
+          rawBody?.migrationTargetColumnId ??
+          url.searchParams.get('migrationTargetColumnId') ??
+          undefined;
+
+        const result = await services.kanban.deleteColumn(
+          actorUserId,
+          organizationId,
+          projectId,
+          columnId,
+          {
+            ...(rawTargetId !== undefined
+              ? {
+                  migrationTargetColumnId: asBoardColumnId(rawTargetId, 'migrationTargetColumnId'),
+                }
+              : {}),
+            correlationId: asCorrelationId(isUuid(correlationId) ? correlationId : nextUuid()),
+          },
+        );
+
+        return buildSuccessResponse(result, correlationId, now, 200);
+      }),
+    ),
+
+    http.post(
+      '*/api/v1/organizations/:organizationId/projects/:projectId/board/columns/:columnId/archive',
+      withSimulatedEndpoint(deps, async ({ request, params, correlationId, now, nextUuid }) => {
+        const actorUserId = requireActorUserId(request);
+        const organizationId = asOrganizationId(
+          String(params.organizationId ?? ''),
+          'organizationId',
+        );
+        const projectId = asProjectId(String(params.projectId ?? ''), 'projectId');
+        const columnId = asBoardColumnId(String(params.columnId ?? ''), 'columnId');
+
+        const archived = await services.kanban.archiveColumn(
+          actorUserId,
+          organizationId,
+          projectId,
+          columnId,
+          {
+            correlationId: asCorrelationId(isUuid(correlationId) ? correlationId : nextUuid()),
+          },
+        );
+
+        return buildSuccessResponse(archived, correlationId, now, 200);
+      }),
+    ),
+
+    http.post(
+      '*/api/v1/organizations/:organizationId/projects/:projectId/board/columns/:columnId/restore',
+      withSimulatedEndpoint(deps, async ({ request, params, correlationId, now, nextUuid }) => {
+        const actorUserId = requireActorUserId(request);
+        const organizationId = asOrganizationId(
+          String(params.organizationId ?? ''),
+          'organizationId',
+        );
+        const projectId = asProjectId(String(params.projectId ?? ''), 'projectId');
+        const columnId = asBoardColumnId(String(params.columnId ?? ''), 'columnId');
+
+        const restored = await services.kanban.restoreColumn(
+          actorUserId,
+          organizationId,
+          projectId,
+          columnId,
+          {
+            correlationId: asCorrelationId(isUuid(correlationId) ? correlationId : nextUuid()),
+          },
+        );
+
+        return buildSuccessResponse(restored, correlationId, now, 200);
+      }),
+    ),
+
+    http.post(
+      '*/api/v1/organizations/:organizationId/projects/:projectId/cards',
+      withSimulatedEndpoint(deps, async ({ request, params, correlationId, now, nextUuid }) => {
+        const actorUserId = requireActorUserId(request);
+        const organizationId = asOrganizationId(
+          String(params.organizationId ?? ''),
+          'organizationId',
+        );
+        const projectId = asProjectId(String(params.projectId ?? ''), 'projectId');
+        const rawBody = (await request.json().catch(() => null)) as CreateQuickCardInput | null;
+        if (!rawBody || typeof rawBody !== 'object') {
+          throw new ValidationError('Invalid JSON body for quick card creation.');
+        }
+
+        const card = await services.kanban.createQuickCard(actorUserId, organizationId, projectId, {
+          ...rawBody,
+          correlationId: asCorrelationId(isUuid(correlationId) ? correlationId : nextUuid()),
+        });
+
+        return buildSuccessResponse(card, correlationId, now, 201);
+      }),
+    ),
+
+    http.post(
+      '*/api/v1/organizations/:organizationId/projects/:projectId/cards/:taskId/move',
+      withSimulatedEndpoint(deps, async ({ request, params, correlationId, now, nextUuid }) => {
+        const actorUserId = requireActorUserId(request);
+        const organizationId = asOrganizationId(
+          String(params.organizationId ?? ''),
+          'organizationId',
+        );
+        const projectId = asProjectId(String(params.projectId ?? ''), 'projectId');
+        const taskId = asTaskId(String(params.taskId ?? ''), 'taskId');
+        const rawBody = (await request.json().catch(() => null)) as MoveCardInput | null;
+        if (!rawBody || typeof rawBody !== 'object') {
+          throw new ValidationError('Invalid JSON body for card movement.');
+        }
+
+        const moved = await services.kanban.moveCard(
+          actorUserId,
+          organizationId,
+          projectId,
+          taskId,
+          {
+            ...rawBody,
+            correlationId: asCorrelationId(isUuid(correlationId) ? correlationId : nextUuid()),
+          },
+        );
+
+        return buildSuccessResponse(moved, correlationId, now, 200);
       }),
     ),
 
     http.get(
       '*/api/v1/organizations/:organizationId/audit-events',
       withSimulatedEndpoint(deps, async ({ request, params, correlationId, now }) => {
+        const actorUserId = requireActorUserId(request);
         const organizationId = asOrganizationId(
           String(params.organizationId ?? ''),
           'organizationId',
         );
 
-        await authorizeOrThrow(
-          deps,
-          request,
-          organizationId,
-          PERMISSION_CODES.AUDIT_ORGANIZATION_VIEW,
-          {
-            kind: 'AUDIT',
-            exists: true,
+        const contextLookup = createAuthorizationContextLookupAdapter(deps.repositories);
+        const [org, membership, scopeSummary, grants, explicitDenies] = await Promise.all([
+          deps.repositories.organizations.organizations.findById(organizationId),
+          contextLookup.getOrganizationMembership(organizationId, actorUserId),
+          contextLookup.getActorScopeSummary(organizationId, actorUserId),
+          deps.repositories.authorization.permissionGrants.listActiveByGrantee(
             organizationId,
+            actorUserId,
+            now,
+          ),
+          deps.repositories.authorization.explicitDenyRules.listActiveByTargetUser(
+            organizationId,
+            actorUserId,
+            now,
+          ),
+        ]);
+
+        assertAuthorized({
+          actor: {
+            isAuthenticated: true,
+            userId: actorUserId,
+            ...(membership !== null ? { organizationMembership: membership } : {}),
+            ...scopeSummary,
+            grants,
+            explicitDenies,
           },
-          now,
-        );
+          action: PERMISSION_CODES.AUDIT_ORGANIZATION_VIEW,
+          resource: {
+            kind: 'AUDIT',
+            exists: org !== null && !isSoftDeleted(org),
+            organizationId,
+            deletedAt: org?.deletedAt,
+          },
+          context: { now },
+        });
 
         const url = new URL(request.url);
         const page = Number(url.searchParams.get('page') ?? '1');

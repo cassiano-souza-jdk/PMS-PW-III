@@ -23,4 +23,5 @@ export interface ProjectMemberRepositoryPort {
   ): Promise<readonly ProjectMember[]>;
   listByUser(organizationId: OrganizationId, userId: UserId): Promise<readonly ProjectMember[]>;
   save(member: ProjectMember): Promise<void>;
+  saveMany(organizationId: OrganizationId, members: readonly ProjectMember[]): Promise<void>;
 }

@@ -116,6 +116,7 @@ export interface TeamMemberDetails extends TeamMember {
 export interface TeamDetails {
   readonly team: Team;
   readonly members: readonly TeamMemberDetails[];
+  readonly activeProjectCount: number;
 }
 
 export interface TeamOperationOptions {
@@ -304,7 +305,10 @@ export class TeamService {
       });
     }
 
-    const rawMembers = await this.deps.teamMembers.listByTeam(validatedOrgId, validatedTeamId);
+    const [rawMembers, linkedProjects] = await Promise.all([
+      this.deps.teamMembers.listByTeam(validatedOrgId, validatedTeamId),
+      this.deps.projects.listByTeam(validatedOrgId, validatedTeamId),
+    ]);
     const activeMembers = rawMembers.filter((member) => member.removedAt === undefined);
     const users = await this.deps.users.findByIds(activeMembers.map((member) => member.userId));
     const userById = new Map(users.map((user) => [user.id, user]));
@@ -321,7 +325,9 @@ export class TeamService {
       };
     });
 
-    return Object.freeze({ team, members });
+    const activeProjectCount = linkedProjects.filter((project) => !isSoftDeleted(project)).length;
+
+    return Object.freeze({ team, members, activeProjectCount });
   }
 
   async createTeam(
