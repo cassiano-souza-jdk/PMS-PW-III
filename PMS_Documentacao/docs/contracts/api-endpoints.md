@@ -1,7 +1,7 @@
 # Contrato de Endpoints Simulados (HTTP Client + MSW v2)
 
-- **Fase:** 03–05 — Dexie, IndexedDB, Repositórios, MSW, Autenticação, Usuários, Organizações, Convites, Equipes e Permissões
-- **Referências normativas:** `API-SIMULATION.md`, `DATA-PERSISTENCE.md`, `ARCHITECTURE.md`, `PERMISSIONS.md`, `SECURITY.md`, `ADR-0002`, `ADR-0003`, `ADR-0007`, `ADR-0008`, `ADR-0009`, `docs/contracts/event-envelope.md`, `docs/contracts/permission-matrix.md`.
+- **Fase:** 03–06 — Dexie, IndexedDB, Repositórios, MSW, Autenticação, Usuários, Organizações, Convites, Equipes, Permissões, Projetos e Quadro Kanban
+- **Referências normativas:** `API-SIMULATION.md`, `DATA-PERSISTENCE.md`, `ARCHITECTURE.md`, `PERMISSIONS.md`, `SECURITY.md`, `ADR-0002`, `ADR-0003`, `ADR-0007`, `ADR-0008`, `ADR-0009`, `ADR-0010`, `docs/contracts/event-envelope.md`, `docs/contracts/permission-matrix.md`.
 
 ## 1. Visão Geral e Princípios Invioláveis
 
@@ -99,21 +99,22 @@ Todo handler registrado em `createMswHandlers` passa pelo `SimulationScenarioCon
 
 ### 6.4 `GET /api/v1/organizations/:organizationId/projects`
 - **Cabeçalhos:** `x-actor-user-id`, `x-correlation-id`.
-- **Autorização:** filtra os projetos da organização avaliando `PERMISSION_CODES.PROJECT_VIEW` para cada projeto no escopo do ator (`ADMIN`, gerente do projeto, participante do projeto ou portador de `PermissionGrant` ativo).
-- **Response (`200 OK`):** `ApiSuccessEnvelope<readonly Project[]>`.
+- **Query Params:** `includeArchived=true` (opcional; padrão `false`).
+- **Autorização:** delega integralmente a `ProjectService.listProjects`, validando associação ativa e filtrando os projetos individuais via `PERMISSION_CODES.PROJECT_VIEW` (`ADMIN`, gestor/participante do projeto ou portador de `PermissionGrant` ativo).
+- **Response (`200 OK`):** `ApiSuccessEnvelope<readonly ProjectListItem[]>` (estende `Project` com `teamName?`, `ownerName`, `participantCount` e `myProjectRole?`). Ver catálogo completo da Fase 06 em §9.
 
 ### 6.5 `POST /api/v1/organizations/:organizationId/projects`
 - **Cabeçalhos:** `x-actor-user-id`, `x-correlation-id`.
-- **Autorização:** `PERMISSION_CODES.PROJECT_CREATE` (exige `ADMIN`, `MANAGER` no escopo de equipe administrada ou `PermissionGrant` válido).
+- **Autorização:** delega integralmente a `ProjectService.createProject` (`PERMISSION_CODES.PROJECT_CREATE`, validando equipe ativa/gerida quando `teamId` é informado e autoridade de atribuição de `ownerUserId`).
 - **Request Body:** `{ id?: string, name: string, description?: string, teamId?: string, ownerUserId?: string, inactivityThresholdDays?: number }`.
-- **Persistência Transacional:** grava atomicamente `Project`, `ProjectMember` (`MANAGER`) e `AuditEvent` (`category: 'PROJECT'`, `eventType: 'project.created'`, `result: 'SUCCESS'`) e publica o evento pós-commit `project.created`.
+- **Persistência Transacional:** grava atomicamente `Project`, `ProjectMember` (`MANAGER`), `ProjectBoard` primário (`Quadro Principal`), as 4 `BoardColumn`s padrão e `AuditEvent` (`category: 'PROJECT'`, `eventType: 'project.created'`, `result: 'SUCCESS'`), publicando `project.created` pós-commit.
 - **Response (`201 Created`):** `ApiSuccessEnvelope<Project>`.
-- **Erros:** `401`, `403`, `422` (`name` vazio ou `inactivityThresholdDays < 1`), `500` (erro simulado ou quota excedida).
+- **Erros:** `401`, `403`, `404` (`teamId` ou `ownerUserId` inexistente), `409` (equipe arquivada ou ID duplicado), `422` (`name` inválido ou `inactivityThresholdDays < 1`), `500` (erro simulado ou quota excedida).
 
 ### 6.6 `GET /api/v1/organizations/:organizationId/projects/:projectId/tasks`
 - **Cabeçalhos:** `x-actor-user-id`, `x-correlation-id`.
-- **Autorização:** `PERMISSION_CODES.PROJECT_VIEW` sobre o projeto alvo.
-- **Response (`200 OK`):** `ApiSuccessEnvelope<readonly Task[]>` (tarefas ativas não excluídas logicamente, ordenadas por `order ASC`).
+- **Autorização:** delega a `KanbanService.getProjectBoard` (`PERMISSION_CODES.BOARD_VIEW` + filtragem individual de cada tarefa via `PERMISSION_CODES.TASK_VIEW`).
+- **Response (`200 OK`):** `ApiSuccessEnvelope<readonly Task[]>` (tarefas visíveis e não excluídas logicamente, ordenadas por `order ASC`).
 
 ### 6.7 `GET /api/v1/organizations/:organizationId/audit-events`
 - **Cabeçalhos:** `x-actor-user-id`, `x-correlation-id`.
@@ -248,3 +249,69 @@ Todos os endpoints abaixo delegam estritamente aos casos de uso em `container.se
 - **Cabeçalhos:** `x-actor-user-id`, `x-correlation-id`.
 - **`GET`:** `ADMIN` vê todas as regras de negação explícita da organização; `MANAGER` vê apenas regras em seus escopos administrados; `MEMBER` recebe `403 Forbidden`.
 - **`POST` e `POST .../revoke`:** exclusivos de `ADMIN` ativo; exigem `reason` obrigatória na criação; aplicam *Deny Overrides* imediato com `AuditEvent` atômico.
+
+---
+
+## 9. Catálogo de Endpoints da Fase 06 (Projetos, Participantes e Quadro Kanban)
+
+Todos os endpoints abaixo delegam estritamente aos casos de uso em `container.services` (`ProjectService` e `KanbanService`), sem regras de negócio nos handlers MSW e sem acesso direto a repositórios Dexie (`ADR-0010` §6). Toda avaliação ABAC sobre quadros e tarefas propaga obrigatoriamente `projectArchivedAt` e `deletedAt` para que projetos arquivados (`DENIED_PROJECT_ARCHIVED`) e recursos excluídos (`DENIED_RESOURCE_DELETED`) retornem `409 Conflict`.
+
+### 9.1 `GET /api/v1/organizations/:organizationId/projects` e `POST .../projects`
+- **Cabeçalhos:** `x-actor-user-id`, `x-correlation-id`.
+- **`GET`:** query param opcional `includeArchived=true`; delega a `ProjectService.listProjects`, exigindo associação ativa na organização (`403 Forbidden` se cross-org ou suspenso) e filtrando projetos individualmente com `PERMISSION_CODES.PROJECT_VIEW`. Retorna `200 OK` com `ApiSuccessEnvelope<readonly ProjectListItem[]>`.
+- **`POST`:** delega a `ProjectService.createProject` (`PERMISSION_CODES.PROJECT_CREATE`). Quando `teamId` é informado, valida equipe ativa (não excluída e não arquivada) na mesma organização e dentro do escopo de `MANAGER`; valida `ownerUserId` (padrão ator) como membro `ACTIVE`; cria atomicamente `Project`, `ProjectMember` (`MANAGER`), `ProjectBoard` (`Quadro Principal`, `isPrimary: true`), 4 `BoardColumn`s padrão (`A Fazer`, `Em Execução` [WIP 3], `Em Revisão` [WIP 2], `Concluído`) e `AuditEvent` (`project.created`), retornando `201 Created`.
+
+### 9.2 `GET/PATCH/DELETE /api/v1/organizations/:organizationId/projects/:projectId`
+- **Cabeçalhos:** `x-actor-user-id`, `x-correlation-id`.
+- **`GET`:** exige `PERMISSION_CODES.PROJECT_VIEW`; retorna `ProjectDetails` (`project`, `teamName?`, `owner`, `members`, `activeParticipantCount`). Erros: `401`, `403`, `404`, `409` (se excluído logicamente).
+- **`PATCH`:** exige `PERMISSION_CODES.PROJECT_UPDATE` em projeto operacional (não arquivado/excluído). Aceita apenas `{ name?, description?, inactivityThresholdDays?, ownerUserId? }` e rejeita qualquer tentativa de enviar `teamId` com `422 Unprocessable Entity` (transferência é exclusiva de `POST .../transfer`). Se `ownerUserId` mudar, valida membro `ACTIVE`, bloqueia `MANAGER` transferir propriedade para `ADMIN` (`403`) e promove/reativa o novo responsável como `ProjectMember` `MANAGER` reutilizando eventual registro removido anterior.
+- **`DELETE`:** exclusivo `ADMIN` (`PERMISSION_CODES.PROJECT_DELETE`); body ou query opcional `{ reason? }`. Marca `deletedAt`/`deletedBy`/`deletionReason`, encerra todos os `ProjectMember` ativos em lote, revoga todas as concessões vinculadas ao projeto via `revokeAllByScope`, grava `AuditEvent` (`project.deleted`) e publica evento pós-commit.
+
+### 9.3 `POST /api/v1/organizations/:organizationId/projects/:projectId/transfer`
+- **Cabeçalhos:** `x-actor-user-id`, `x-correlation-id`.
+- **Autorização:** `PERMISSION_CODES.PROJECT_TRANSFER`.
+- **Request Body:** `{ targetTeamId: string | null, reason?: string }`.
+- **Comportamento:** `MANAGER` só pode transferir entre equipes sob sua administração (`managedTeamIds`) e é impedido de desvincular (`targetTeamId: null`). Valida equipe destino ativa (não excluída com `404`, não arquivada com `409`) e projeto operacional (`409` se arquivado). Grava `AuditEvent` (`project.team_transferred`).
+- **Response (`200 OK`):** `ApiSuccessEnvelope<Project>`.
+
+### 9.4 `POST /api/v1/organizations/:organizationId/projects/:projectId/archive` e `/restore`
+- **Cabeçalhos:** `x-actor-user-id`, `x-correlation-id`.
+- **Autorização:** `PERMISSION_CODES.PROJECT_ARCHIVE` (`/archive`) e `PERMISSION_CODES.PROJECT_RESTORE` (`/restore`).
+- **Comportamento:** transicionam `status` entre `'ACTIVE'` e `'ARCHIVED'` (`409 Conflict` se já estiver no estado alvo), preservam quadro, colunas e histórico e gravam `AuditEvent` (`project.archived` / `project.restored`).
+- **Response (`200 OK`):** `ApiSuccessEnvelope<Project>`.
+
+### 9.5 `POST/PATCH/DELETE /api/v1/organizations/:organizationId/projects/:projectId/participants`
+- **Cabeçalhos:** `x-actor-user-id`, `x-correlation-id`.
+- **Autorização:** `PERMISSION_CODES.PROJECT_MEMBERS_MANAGE` (bloqueada com `409 Conflict` em projeto arquivado ou excluído).
+- **`POST .../participants`:** body `{ userId: string, role?: 'MANAGER' | 'PARTICIPANT' }` (padrão `'PARTICIPANT'`). Exige membro `ACTIVE` da mesma organização (`404` se inexistente/inativo), bloqueia duplicidade ativa (`409`), reutiliza `existing.id` ao reativar ex-participante (`removedAt !== undefined`) e retorna `201 Created` (`ProjectMember`).
+- **`PATCH .../participants/:userId`:** body `{ role: 'MANAGER' | 'PARTICIPANT' }`. Protege o `ownerUserId` contra rebaixamento e impede deixar o projeto sem nenhum `ProjectMember` `MANAGER` ativo (`409 Conflict`), além de impedir `MANAGER` de alterar o papel de um `ADMIN` da organização ou rebaixar a si próprio (`403 Forbidden`).
+- **`DELETE .../participants/:userId`:** protege `ownerUserId` e último `MANAGER` ativo (`409 Conflict`); verifica tarefas pendentes (`status !== 'DONE' && status !== 'CANCELLED'`) onde o usuário seja responsável principal (`assigneeId`) ou `TaskParticipant` ativo via `assertParticipantRemovalHandled` (`409 Conflict` se `> 0`); na mesma transação preenche `removedAt`, invoca `revokeByScope` para o escopo `PROJECT` e grava `AuditEvent` (`project.member.removed`), preservando `OrganizationMember`.
+
+### 9.6 `GET /api/v1/organizations/:organizationId/projects/:projectId/export`
+- **Cabeçalhos:** `x-actor-user-id`, `x-correlation-id`.
+- **Autorização:** `PERMISSION_CODES.PROJECT_VIEW` (e verificação de `BOARD_VIEW` para incluir metadados do quadro/colunas), filtrando tarefas individualmente com `PERMISSION_CODES.TASK_VIEW` (nunca exige `DATA_EXPORT`).
+- **Response (`200 OK`):** `ApiSuccessEnvelope<ProjectExportData>` contendo `{ exportedAt, organizationId, project, teamName?, participants, board?, columns, tasks }` sanitizados (zero hashes, credenciais ou tokens) e registrando `AuditEvent` (`category: 'EXPORT'`, `eventType: 'project.exported'`).
+
+### 9.7 `GET /api/v1/organizations/:organizationId/projects/:projectId/board`
+- **Cabeçalhos:** `x-actor-user-id`, `x-correlation-id`.
+- **Autorização:** `PERMISSION_CODES.BOARD_VIEW`.
+- **Comportamento:** calcula `occupyingTaskCount` por coluna com `doesTaskStatusOccupyWip(task.status)` sobre todas as tarefas ativas (incluindo `BLOCKED` e `PAUSED`, mesmo quando o ator não visualiza todas as tarefas), filtra os cartões retornados individualmente por `PERMISSION_CODES.TASK_VIEW` e retorna flags de capacidade (`canConfigureBoard`, `canManageColumns`, `canManageWip`, `canCreateQuickCard`, `canMoveWithWipOverride`, `canMove`, `canComplete`, `canReopen`) considerando `projectArchivedAt`.
+- **Response (`200 OK`):** `ApiSuccessEnvelope<ProjectBoardView>`.
+
+### 9.8 Colunas do Quadro Kanban (`.../projects/:projectId/board/columns*`)
+- **Cabeçalhos:** `x-actor-user-id`, `x-correlation-id`.
+- **`POST .../board/columns`:** exige `BOARD_COLUMNS_MANAGE` (e `BOARD_WIP_MANAGE` quando `wipLimit !== null`); body `{ name, columnRole, wipLimit, order? }`; valida `assertValidBoardColumns` e retorna `201 Created` (`BoardColumn`).
+- **`PATCH .../board/columns/:columnId`:** exige `BOARD_COLUMNS_MANAGE` e, quando `wipLimit !== undefined`, exige também `BOARD_WIP_MANAGE`; valida `assertValidBoardColumns` e retorna `200 OK` (`BoardColumn`).
+- **`POST .../board/columns/reorder`:** exige `BOARD_COLUMNS_MANAGE`; body `{ orderedColumnIds: string[] }` exigindo permutação exata (`422` se faltar, sobrar ou duplicar ID); persiste via `saveMany` e retorna `200 OK` (`readonly BoardColumn[]`).
+- **`POST .../board/columns/:columnId/archive` e `/restore`:** exigem `BOARD_COLUMNS_MANAGE`; `archive` bloqueia com `409 Conflict` se houver tarefas ativas na coluna e valida `assertValidBoardColumns`; retornam `200 OK` (`BoardColumn`).
+- **`DELETE .../board/columns/:columnId`:** exige `BOARD_COLUMNS_MANAGE`; query ou body opcional `migrationTargetColumnId`. Consulta todas as tarefas da coluna com `includeDeleted: true`, valida `assertColumnCanBeDeleted`, migra atomicamente tarefas ativas e soft-deleted para a coluna destino antes de excluir a coluna e retorna `200 OK` (`{ deletedColumnId, migratedTaskCount }`).
+- **Invariante comum:** todas as mutações de coluna rejeitam projetos arquivados ou excluídos com `409 Conflict` e gravam `AuditEvent` (`category: 'KANBAN'`).
+
+### 9.9 Cartões Rápidos e Movimentação (`.../projects/:projectId/cards*`)
+- **Cabeçalhos:** `x-actor-user-id`, `x-correlation-id`.
+- **`POST .../cards`:** delega a `KanbanService.createQuickCard` (`PERMISSION_CODES.TASK_CREATE` parametrizado com `OrganizationSettings.pendingPermissionDefaults.allowMemberCreateTaskWithoutGrant`). Body `{ title, description?, columnId?, assigneeId?, priority? }`. Valida projeto operacional, coluna ativa não-`FINAL`, participante ativo para `assigneeId` (se informado) e WIP (`assertWipAllowsCardMove`); cria `Task`, `TaskExecutionCycle` inicial e `AuditEvent` (`task.created`), retornando `201 Created`.
+- **`POST .../cards/:taskId/move`:** delega a `KanbanService.moveCard` (`PERMISSION_CODES.BOARD_CARD_MOVE` + `PERMISSION_CODES.TASK_MOVE`). Body `{ targetColumnId, targetOrder?, wipOverrideJustification?, dependencyOverrideJustification?, pausedOverrideJustification?, reopenReason? }`.
+  - Bloqueia tarefas `CANCELLED` (`409 Conflict`), projetos/colunas arquivadas (`409`), tarefas pausadas sem retomada/exceção autorizada (`409`/`403`/`422`) e excesso de WIP sem `BOARD_WIP_MANAGE` + justificativa não vazia (`409`/`403`/`422`).
+  - Ao entrar em coluna `FINAL`: exige `TASK_COMPLETE` + `assertTaskCanBeCompleted` (subtarefas obrigatórias, impedimentos bloqueantes, dependências obrigatórias pendentes), transita para `DONE`, preenche `completedAt` e encerra o ciclo de execução.
+  - Ao sair de coluna `FINAL`: exige `TASK_REOPEN` + `assertTaskReopenCreatesNewCycle`, transita para `IN_PROGRESS` (ou `TODO` em coluna `INITIAL`), limpa `completedAt` e cria novo ciclo imutável.
+  - Preserva `lastMovedAt` original na reordenação dentro da mesma coluna e atualiza `lastMovedAt` + `lastActivityAt` na troca de coluna (`PRD.md` §12.1), gravando `AuditEvent` (`kanban.card.moved`) e retornando `200 OK` (`Task`).

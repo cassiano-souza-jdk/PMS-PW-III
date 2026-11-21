@@ -10,7 +10,9 @@ import {
 } from '@/modules/authentication/infrastructure/session/ephemeral-session-pointer';
 import { AuthorizationManagementService } from '@/modules/authorization';
 import { InvitationService } from '@/modules/invitations';
+import { KanbanService } from '@/modules/kanban';
 import { OrganizationService } from '@/modules/organizations';
+import { ProjectService } from '@/modules/projects';
 import { TeamService } from '@/modules/teams';
 import { UserService } from '@/modules/users';
 import { env as defaultEnv, type AppEnv } from '@/shared/config';
@@ -42,6 +44,10 @@ import {
   createAuthorizationContextLookupAdapter,
 } from './authorization-ports-adapter';
 import { ensureDemoOrganizationSeeded, type DemoOrganizationSeedResult } from './demo-seed';
+import {
+  createProjectBoardInitializerAdapter,
+  createProjectTeamLookupAdapter,
+} from './project-ports-adapter';
 import { createRepositoriesRegistry, type AppRepositoriesRegistry } from './repositories-registry';
 
 export interface AppServicesRegistry {
@@ -50,6 +56,8 @@ export interface AppServicesRegistry {
   readonly organizations: OrganizationService;
   readonly invitations: InvitationService;
   readonly teams: TeamService;
+  readonly projects: ProjectService;
+  readonly kanban: KanbanService;
   readonly authorization: AuthorizationManagementService;
 }
 
@@ -205,6 +213,47 @@ export function createAppContainer(
         projects: resolvedRepositories.projects.projects,
         organizationMembers: resolvedRepositories.organizations.organizationMembers,
         users: resolvedRepositories.users.users,
+        permissionGrants: resolvedRepositories.authorization.permissionGrants,
+        explicitDenyRules: resolvedRepositories.authorization.explicitDenyRules,
+        auditEvents: resolvedRepositories.audit.auditEvents,
+        transactionPort: resolvedTransactionPort,
+        eventBus: resolvedEventBus,
+        logger: resolvedLogger,
+        ...(options.now !== undefined ? { now: options.now } : {}),
+        ...(options.generateUuid !== undefined ? { generateUuid: options.generateUuid } : {}),
+      }),
+      projects: new ProjectService({
+        projects: resolvedRepositories.projects.projects,
+        projectMembers: resolvedRepositories.projects.projectMembers,
+        tasks: resolvedRepositories.tasks.tasks,
+        taskParticipants: resolvedRepositories.tasks.taskParticipants,
+        organizationMembers: resolvedRepositories.organizations.organizationMembers,
+        users: resolvedRepositories.users.users,
+        permissionGrants: resolvedRepositories.authorization.permissionGrants,
+        explicitDenyRules: resolvedRepositories.authorization.explicitDenyRules,
+        auditEvents: resolvedRepositories.audit.auditEvents,
+        teamLookup: createProjectTeamLookupAdapter(resolvedRepositories),
+        boardInitializer: createProjectBoardInitializerAdapter(resolvedRepositories),
+        transactionPort: resolvedTransactionPort,
+        eventBus: resolvedEventBus,
+        logger: resolvedLogger,
+        ...(options.now !== undefined ? { now: options.now } : {}),
+        ...(options.generateUuid !== undefined ? { generateUuid: options.generateUuid } : {}),
+      }),
+      kanban: new KanbanService({
+        projects: resolvedRepositories.projects.projects,
+        projectMembers: resolvedRepositories.projects.projectMembers,
+        projectBoards: resolvedRepositories.kanban.projectBoards,
+        boardColumns: resolvedRepositories.kanban.boardColumns,
+        tasks: resolvedRepositories.tasks.tasks,
+        taskParticipants: resolvedRepositories.tasks.taskParticipants,
+        subtasks: resolvedRepositories.tasks.subtasks,
+        taskDependencies: resolvedRepositories.dependencies.taskDependencies,
+        impediments: resolvedRepositories.impediments.impediments,
+        taskPauses: resolvedRepositories.tasks.taskPauses,
+        taskExecutionCycles: resolvedRepositories.tasks.taskExecutionCycles,
+        organizationMembers: resolvedRepositories.organizations.organizationMembers,
+        organizationSettings: resolvedRepositories.settings.organizationSettings,
         permissionGrants: resolvedRepositories.authorization.permissionGrants,
         explicitDenyRules: resolvedRepositories.authorization.explicitDenyRules,
         auditEvents: resolvedRepositories.audit.auditEvents,
