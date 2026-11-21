@@ -1,7 +1,7 @@
 import { zodResolver } from '@hookform/resolvers/zod';
 import { IconKey, IconShieldLock, IconShieldOff, IconTrash } from '@tabler/icons-react';
 import { useState } from 'react';
-import { useForm, useWatch } from 'react-hook-form';
+import { useForm, useWatch, type UseFormRegisterReturn } from 'react-hook-form';
 import { useIntl } from 'react-intl';
 import { z } from 'zod';
 import type { MessageId } from '@/shared/i18n';
@@ -138,6 +138,7 @@ export interface PermissionsPanelProps {
   readonly allPermissions: readonly PermissionCodeValue[];
   readonly members: readonly PermissionMemberOption[];
   readonly teamScopes: readonly PermissionScopeOption[];
+  readonly projectScopes?: readonly PermissionScopeOption[];
   readonly organizationGrants: readonly PermissionGrantWithDerivedStatus[];
   readonly organizationDenies: readonly ExplicitDenyRuleWithActiveFlag[];
   readonly isLoadingRules: boolean;
@@ -193,6 +194,7 @@ export function PermissionsPanel({
   allPermissions,
   members,
   teamScopes,
+  projectScopes = [],
   organizationGrants,
   organizationDenies,
   isLoadingRules,
@@ -217,7 +219,7 @@ export function PermissionsPanel({
       granteeUserId: members[0]?.userId ?? '',
       permission: defaultGrantPermission,
       scopeType: defaultGrantScope,
-      scopeId: teamScopes[0]?.id ?? '',
+      scopeId: defaultGrantScope === 'TEAM' ? (teamScopes[0]?.id ?? '') : '',
       reason: '',
       startsAt: '',
       expiresAt: '',
@@ -257,6 +259,74 @@ export function PermissionsPanel({
         {intl.formatMessage({ id: resolveValidationMessageId(error.message) })}
       </p>
     ) : null;
+
+  const renderScopeTargetField = ({
+    inputId,
+    errorId,
+    scopeType,
+    hasError,
+    registration,
+    error,
+  }: {
+    readonly inputId: string;
+    readonly errorId: string;
+    readonly scopeType: ScopeTypeValue;
+    readonly hasError: boolean;
+    readonly registration: UseFormRegisterReturn<'scopeId'>;
+    readonly error: { readonly message?: string } | undefined;
+  }) => {
+    const describedBy = hasError ? errorId : undefined;
+
+    if (scopeType === 'TEAM' || scopeType === 'PROJECT') {
+      const options = scopeType === 'TEAM' ? teamScopes : projectScopes;
+      const placeholderId: MessageId =
+        scopeType === 'TEAM'
+          ? 'permissions.grants.selectTeamPlaceholder'
+          : 'permissions.grants.selectProjectPlaceholder';
+
+      return (
+        <div className="space-y-1.5">
+          <Label htmlFor={inputId} required>
+            {intl.formatMessage({ id: 'permissions.grants.scopeIdLabel' })}
+          </Label>
+          <select
+            key={`${inputId}-${scopeType}`}
+            id={inputId}
+            aria-invalid={hasError}
+            aria-describedby={describedBy}
+            className="flex min-h-[44px] w-full rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+            {...registration}
+          >
+            <option value="">{intl.formatMessage({ id: placeholderId })}</option>
+            {options.map((option) => (
+              <option key={option.id} value={option.id}>
+                {option.label}
+              </option>
+            ))}
+          </select>
+          {renderFieldError(errorId, error)}
+        </div>
+      );
+    }
+
+    return (
+      <div className="space-y-1.5">
+        <Label htmlFor={inputId} required>
+          {intl.formatMessage({ id: 'permissions.grants.scopeIdLabel' })}
+        </Label>
+        <Input
+          key={`${inputId}-RESOURCE`}
+          id={inputId}
+          type="text"
+          placeholder={intl.formatMessage({ id: 'permissions.grants.resourceUuidPlaceholder' })}
+          aria-invalid={hasError}
+          aria-describedby={describedBy}
+          {...registration}
+        />
+        {renderFieldError(errorId, error)}
+      </div>
+    );
+  };
 
   const handleGrantSubmit = async (values: GrantFormValues) => {
     const matchedPermission = delegablePermissions.find((code) => code === values.permission);
@@ -483,7 +553,9 @@ export function PermissionsPanel({
                       className="flex min-h-[44px] w-full rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
                       {...grantForm.register('granteeUserId')}
                     >
-                      <option value="">Selecione um membro</option>
+                      <option value="">
+                        {intl.formatMessage({ id: 'permissions.grants.selectMemberPlaceholder' })}
+                      </option>
                       {members.map((member) => (
                         <option key={member.userId} value={member.userId}>
                           {member.displayName} ({member.email})
@@ -521,7 +593,12 @@ export function PermissionsPanel({
                     <select
                       id="grant-scope-type"
                       className="flex min-h-[44px] w-full rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
-                      {...grantForm.register('scopeType')}
+                      {...grantForm.register('scopeType', {
+                        onChange: () => {
+                          grantForm.setValue('scopeId', '', { shouldValidate: false });
+                          grantForm.clearErrors('scopeId');
+                        },
+                      })}
                     >
                       {allowedGrantScopeTypes.map((scopeType) => (
                         <option key={scopeType} value={scopeType}>
@@ -531,47 +608,16 @@ export function PermissionsPanel({
                     </select>
                   </div>
 
-                  {selectedGrantScopeType !== 'ORGANIZATION' ? (
-                    <div className="space-y-1.5">
-                      <Label htmlFor="grant-scope-id" required>
-                        {intl.formatMessage({ id: 'permissions.grants.scopeIdLabel' })}
-                      </Label>
-                      {selectedGrantScopeType === 'TEAM' ? (
-                        <select
-                          id="grant-scope-id"
-                          aria-invalid={grantForm.formState.errors.scopeId !== undefined}
-                          aria-describedby={
-                            grantForm.formState.errors.scopeId !== undefined
-                              ? 'grant-scope-id-error'
-                              : undefined
-                          }
-                          className="flex min-h-[44px] w-full rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
-                          {...grantForm.register('scopeId')}
-                        >
-                          <option value="">Selecione uma equipe</option>
-                          {teamScopes.map((team) => (
-                            <option key={team.id} value={team.id}>
-                              {team.label}
-                            </option>
-                          ))}
-                        </select>
-                      ) : (
-                        <Input
-                          id="grant-scope-id"
-                          type="text"
-                          placeholder="UUID do projeto ou recurso"
-                          aria-invalid={grantForm.formState.errors.scopeId !== undefined}
-                          aria-describedby={
-                            grantForm.formState.errors.scopeId !== undefined
-                              ? 'grant-scope-id-error'
-                              : undefined
-                          }
-                          {...grantForm.register('scopeId')}
-                        />
-                      )}
-                      {renderFieldError('grant-scope-id-error', grantForm.formState.errors.scopeId)}
-                    </div>
-                  ) : null}
+                  {selectedGrantScopeType !== 'ORGANIZATION'
+                    ? renderScopeTargetField({
+                        inputId: 'grant-scope-id',
+                        errorId: 'grant-scope-id-error',
+                        scopeType: selectedGrantScopeType,
+                        hasError: grantForm.formState.errors.scopeId !== undefined,
+                        registration: grantForm.register('scopeId'),
+                        error: grantForm.formState.errors.scopeId,
+                      })
+                    : null}
 
                   <div className="space-y-1.5">
                     <Label htmlFor="grant-starts-at">
@@ -777,7 +823,9 @@ export function PermissionsPanel({
                       className="flex min-h-[44px] w-full rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
                       {...denyForm.register('targetUserId')}
                     >
-                      <option value="">Selecione um membro</option>
+                      <option value="">
+                        {intl.formatMessage({ id: 'permissions.grants.selectMemberPlaceholder' })}
+                      </option>
                       {members.map((member) => (
                         <option key={member.userId} value={member.userId}>
                           {member.displayName} ({member.email})
@@ -817,7 +865,12 @@ export function PermissionsPanel({
                     <select
                       id="deny-scope-type"
                       className="flex min-h-[44px] w-full rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
-                      {...denyForm.register('scopeType')}
+                      {...denyForm.register('scopeType', {
+                        onChange: () => {
+                          denyForm.setValue('scopeId', '', { shouldValidate: false });
+                          denyForm.clearErrors('scopeId');
+                        },
+                      })}
                     >
                       <option value="ORGANIZATION">
                         {intl.formatMessage({ id: 'permissions.scope.ORGANIZATION' })}
@@ -828,50 +881,22 @@ export function PermissionsPanel({
                       <option value="PROJECT">
                         {intl.formatMessage({ id: 'permissions.scope.PROJECT' })}
                       </option>
+                      <option value="RESOURCE">
+                        {intl.formatMessage({ id: 'permissions.scope.RESOURCE' })}
+                      </option>
                     </select>
                   </div>
 
-                  {selectedDenyScopeType !== 'ORGANIZATION' ? (
-                    <div className="space-y-1.5">
-                      <Label htmlFor="deny-scope-id" required>
-                        {intl.formatMessage({ id: 'permissions.grants.scopeIdLabel' })}
-                      </Label>
-                      {selectedDenyScopeType === 'TEAM' ? (
-                        <select
-                          id="deny-scope-id"
-                          aria-invalid={denyForm.formState.errors.scopeId !== undefined}
-                          aria-describedby={
-                            denyForm.formState.errors.scopeId !== undefined
-                              ? 'deny-scope-id-error'
-                              : undefined
-                          }
-                          className="flex min-h-[44px] w-full rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
-                          {...denyForm.register('scopeId')}
-                        >
-                          <option value="">Selecione uma equipe</option>
-                          {teamScopes.map((team) => (
-                            <option key={team.id} value={team.id}>
-                              {team.label}
-                            </option>
-                          ))}
-                        </select>
-                      ) : (
-                        <Input
-                          id="deny-scope-id"
-                          type="text"
-                          placeholder="UUID do projeto ou recurso"
-                          aria-invalid={denyForm.formState.errors.scopeId !== undefined}
-                          aria-describedby={
-                            denyForm.formState.errors.scopeId !== undefined
-                              ? 'deny-scope-id-error'
-                              : undefined
-                          }
-                          {...denyForm.register('scopeId')}
-                        />
-                      )}
-                      {renderFieldError('deny-scope-id-error', denyForm.formState.errors.scopeId)}
-                    </div>
-                  ) : null}
+                  {selectedDenyScopeType !== 'ORGANIZATION'
+                    ? renderScopeTargetField({
+                        inputId: 'deny-scope-id',
+                        errorId: 'deny-scope-id-error',
+                        scopeType: selectedDenyScopeType,
+                        hasError: denyForm.formState.errors.scopeId !== undefined,
+                        registration: denyForm.register('scopeId'),
+                        error: denyForm.formState.errors.scopeId,
+                      })
+                    : null}
 
                   <div className="space-y-1.5">
                     <Label htmlFor="deny-expires-at">

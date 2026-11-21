@@ -32,6 +32,7 @@ interface LoadedPermissionsData {
   readonly denies: readonly ExplicitDenyRuleWithActiveFlag[];
   readonly members: readonly PermissionMemberOption[];
   readonly teamScopes: readonly PermissionScopeOption[];
+  readonly projectScopes: readonly PermissionScopeOption[];
 }
 
 const INITIAL_DATA: LoadedPermissionsData = {
@@ -40,6 +41,7 @@ const INITIAL_DATA: LoadedPermissionsData = {
   denies: [],
   members: [],
   teamScopes: [],
+  projectScopes: [],
 };
 
 const MANAGER_DELEGABLE_LIST: readonly PermissionCode[] = PERMISSION_CODE_LIST.filter((code) =>
@@ -74,7 +76,7 @@ export function PermissionsPage() {
     if (user === null || activeOrganization === null || contextKey === null) {
       return;
     }
-    const [grants, denies, rawMembers, rawTeams] = await Promise.all([
+    const [grants, denies, rawMembers, rawTeams, rawProjects] = await Promise.all([
       services.authorization.listOrganizationGrants(user.id, activeOrganization.id).catch(() => []),
       services.authorization
         .listOrganizationDenyRules(user.id, activeOrganization.id)
@@ -84,6 +86,9 @@ export function PermissionsPage() {
         .catch(() => []),
       services.teams
         .listTeams(user.id, activeOrganization.id, { includeArchived: false })
+        .catch(() => []),
+      services.projects
+        .listProjects(user.id, activeOrganization.id, { includeArchived: true })
         .catch(() => []),
     ]);
 
@@ -103,12 +108,17 @@ export function PermissionsPage() {
         id: team.id,
         label: team.name,
       })),
+      projectScopes: rawProjects.map((project) => ({
+        id: project.id,
+        label: project.name,
+      })),
     });
   }, [
     activeOrganization,
     contextKey,
     services.authorization,
     services.organizations,
+    services.projects,
     services.teams,
     user,
   ]);
@@ -124,12 +134,15 @@ export function PermissionsPage() {
     const targetKey = contextKey;
 
     async function loadRules() {
-      const [grants, denies, rawMembers, rawTeams] = await Promise.all([
+      const [grants, denies, rawMembers, rawTeams, rawProjects] = await Promise.all([
         services.authorization.listOrganizationGrants(actorUserId, targetOrgId).catch(() => []),
         services.authorization.listOrganizationDenyRules(actorUserId, targetOrgId).catch(() => []),
         services.organizations.listOrganizationMembers(actorUserId, targetOrgId).catch(() => []),
         services.teams
           .listTeams(actorUserId, targetOrgId, { includeArchived: false })
+          .catch(() => []),
+        services.projects
+          .listProjects(actorUserId, targetOrgId, { includeArchived: true })
           .catch(() => []),
       ]);
 
@@ -153,6 +166,10 @@ export function PermissionsPage() {
           id: team.id,
           label: team.name,
         })),
+        projectScopes: rawProjects.map((project) => ({
+          id: project.id,
+          label: project.name,
+        })),
       });
     }
 
@@ -166,6 +183,7 @@ export function PermissionsPage() {
     contextKey,
     services.authorization,
     services.organizations,
+    services.projects,
     services.teams,
     user,
   ]);
@@ -200,6 +218,7 @@ export function PermissionsPage() {
         PERMISSION_SCOPE_TYPES.ORGANIZATION,
         PERMISSION_SCOPE_TYPES.TEAM,
         PERMISSION_SCOPE_TYPES.PROJECT,
+        PERMISSION_SCOPE_TYPES.RESOURCE,
       ]
     : [PERMISSION_SCOPE_TYPES.TEAM, PERMISSION_SCOPE_TYPES.PROJECT];
 
@@ -309,6 +328,7 @@ export function PermissionsPage() {
       allPermissions={PERMISSION_CODE_LIST}
       members={isCurrentLoaded ? loadedData.members : []}
       teamScopes={isCurrentLoaded ? loadedData.teamScopes : []}
+      projectScopes={isCurrentLoaded ? loadedData.projectScopes : []}
       organizationGrants={isCurrentLoaded ? loadedData.grants : []}
       organizationDenies={isCurrentLoaded ? loadedData.denies : []}
       isLoadingRules={isLoadingRules}

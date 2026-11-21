@@ -170,6 +170,13 @@ export function AppShell() {
                         </NavLink>
                       </li>
                     ) : null}
+                    {activeOrganization !== null ? (
+                      <li>
+                        <NavLink to="/projects" className={navLinkClassName}>
+                          {intl.formatMessage({ id: 'nav.projects' })}
+                        </NavLink>
+                      </li>
+                    ) : null}
                     <li>
                       <NavLink to="/invitations" className={navLinkClassName}>
                         {intl.formatMessage({ id: 'nav.invitations' })}
