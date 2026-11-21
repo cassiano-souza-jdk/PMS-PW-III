@@ -10,3 +10,13 @@ export {
   type InvitationStatus,
 } from './domain/invitation';
 export type { InvitationRepositoryPort } from './application/ports/invitation-repository.port';
+export {
+  InvitationService,
+  type AcceptInvitationResult,
+  type CreateInvitationInput,
+  type CreateInvitationResult,
+  type InvitationListItem,
+  type InvitationOperationOptions,
+  type InvitationPreview,
+  type InvitationServiceDependencies,
+} from './application/use-cases/invitation-service';

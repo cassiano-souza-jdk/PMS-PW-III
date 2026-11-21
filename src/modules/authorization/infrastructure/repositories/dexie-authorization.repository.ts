@@ -146,6 +146,40 @@ export class DexiePermissionGrantRepository implements PermissionGrantRepository
       return updatedGrants.length;
     });
   }
+
+  async revokeAllByScope(
+    organizationId: OrganizationId,
+    scopeType: PermissionScopeType,
+    scopeId: EntityId,
+    revokedByUserId: UserId,
+    revokedAt: IsoDateTime,
+  ): Promise<number> {
+    return withPersistenceErrorHandling('PermissionGrant.revokeAllByScope', async () => {
+      const orgGrants = await this.table.where('organizationId').equals(organizationId).toArray();
+
+      const grantsToRevoke = orgGrants.filter(
+        (grant) =>
+          grant.scopeType === scopeType &&
+          grant.scopeId === scopeId &&
+          grant.revokedAt === undefined &&
+          grant.status !== GRANT_STATUSES.REVOKED,
+      );
+
+      if (grantsToRevoke.length === 0) {
+        return 0;
+      }
+
+      const updatedGrants: PermissionGrant[] = grantsToRevoke.map((grant) => ({
+        ...grant,
+        revokedAt,
+        revokedByUserId,
+        status: GRANT_STATUSES.REVOKED,
+      }));
+
+      await this.table.bulkPut(updatedGrants);
+      return updatedGrants.length;
+    });
+  }
 }
 
 export class DexieExplicitDenyRuleRepository implements ExplicitDenyRuleRepositoryPort {

@@ -10,13 +10,22 @@ import {
 import { WebCryptoSimulatedPasswordVerifier } from '@/modules/authentication/infrastructure/security/web-crypto-password-verifier';
 import { InMemoryEphemeralSessionPointer } from '@/modules/authentication/infrastructure/session/ephemeral-session-pointer';
 import {
+  AuthorizationManagementService,
   PERMISSION_CODES,
+  asDenyRuleId,
   assertAuthorized,
   type AuthorizationActor,
   type AuthorizationResource,
+  type CreateExplicitDenyRuleInput,
+  type GrantPermissionInput,
   type PermissionCode,
 } from '@/modules/authorization';
 import { DEMO_SEED_VERSION } from '@/modules/demo';
+import {
+  InvitationService,
+  asInvitationId,
+  type CreateInvitationInput,
+} from '@/modules/invitations';
 import {
   OrganizationService,
   type CreateOrganizationInput,
@@ -28,6 +37,7 @@ import {
   asProjectMemberId,
   type Project,
 } from '@/modules/projects';
+import { TeamService, type CreateTeamInput, type UpdateTeamInput } from '@/modules/teams';
 import { UserService, type UpdateMyProfileInput } from '@/modules/users';
 import {
   AuthenticationError,
@@ -49,6 +59,7 @@ import {
   asCorrelationId,
   asEntityId,
   asEventId,
+  asGrantId,
   asIsoDateTime,
   asOrganizationId,
   asProjectId,
@@ -66,6 +77,10 @@ import {
   type UserId,
 } from '@/shared/kernel';
 import { PMS_DATABASE_NAME, PMS_SCHEMA_VERSION } from '@/shared/persistence';
+import {
+  createAuthorizationAuditWriterAdapter,
+  createAuthorizationContextLookupAdapter,
+} from './authorization-ports-adapter';
 import type { AppServicesRegistry } from './container';
 import {
   DEMO_ORG_ID,
@@ -374,6 +389,43 @@ function resolveMswServices(deps: MswCompositionDependencies): AppServicesRegist
       permissionGrants: deps.repositories.authorization.permissionGrants,
       explicitDenyRules: deps.repositories.authorization.explicitDenyRules,
       auditEvents: deps.repositories.audit.auditEvents,
+      transactionPort: deps.transactionPort,
+      eventBus: deps.eventBus,
+      ...(deps.now !== undefined ? { now: deps.now } : {}),
+      ...(deps.generateUuid !== undefined ? { generateUuid: deps.generateUuid } : {}),
+    }),
+    invitations: new InvitationService({
+      invitations: deps.repositories.invitations.invitations,
+      organizations: deps.repositories.organizations.organizations,
+      organizationMembers: deps.repositories.organizations.organizationMembers,
+      users: deps.repositories.users.users,
+      permissionGrants: deps.repositories.authorization.permissionGrants,
+      explicitDenyRules: deps.repositories.authorization.explicitDenyRules,
+      auditEvents: deps.repositories.audit.auditEvents,
+      transactionPort: deps.transactionPort,
+      eventBus: deps.eventBus,
+      ...(deps.now !== undefined ? { now: deps.now } : {}),
+      ...(deps.generateUuid !== undefined ? { generateUuid: deps.generateUuid } : {}),
+    }),
+    teams: new TeamService({
+      teams: deps.repositories.teams.teams,
+      teamMembers: deps.repositories.teams.teamMembers,
+      projects: deps.repositories.projects.projects,
+      organizationMembers: deps.repositories.organizations.organizationMembers,
+      users: deps.repositories.users.users,
+      permissionGrants: deps.repositories.authorization.permissionGrants,
+      explicitDenyRules: deps.repositories.authorization.explicitDenyRules,
+      auditEvents: deps.repositories.audit.auditEvents,
+      transactionPort: deps.transactionPort,
+      eventBus: deps.eventBus,
+      ...(deps.now !== undefined ? { now: deps.now } : {}),
+      ...(deps.generateUuid !== undefined ? { generateUuid: deps.generateUuid } : {}),
+    }),
+    authorization: new AuthorizationManagementService({
+      permissionGrants: deps.repositories.authorization.permissionGrants,
+      explicitDenyRules: deps.repositories.authorization.explicitDenyRules,
+      contextLookup: createAuthorizationContextLookupAdapter(deps.repositories),
+      auditWriter: createAuthorizationAuditWriterAdapter(deps.repositories, deps.generateUuid),
       transactionPort: deps.transactionPort,
       eventBus: deps.eventBus,
       ...(deps.now !== undefined ? { now: deps.now } : {}),
@@ -742,6 +794,472 @@ export function createMswHandlers(deps: MswCompositionDependencies): readonly Ht
         );
 
         return buildSuccessResponse(removedMembership, correlationId, now, 200);
+      }),
+    ),
+
+    // -------------------------------------------------------------------------
+    // Phase 05 — Invitations (delegating strictly to InvitationService)
+    // -------------------------------------------------------------------------
+    http.get(
+      '*/api/v1/organizations/:organizationId/invitations',
+      withSimulatedEndpoint(deps, async ({ request, params, correlationId, now }) => {
+        const actorUserId = requireActorUserId(request);
+        const organizationId = asOrganizationId(
+          String(params.organizationId ?? ''),
+          'organizationId',
+        );
+
+        const invitations = await services.invitations.listInvitations(actorUserId, organizationId);
+        return buildSuccessResponse(invitations, correlationId, now, 200);
+      }),
+    ),
+
+    http.post(
+      '*/api/v1/organizations/:organizationId/invitations',
+      withSimulatedEndpoint(deps, async ({ request, params, correlationId, now, nextUuid }) => {
+        const actorUserId = requireActorUserId(request);
+        const organizationId = asOrganizationId(
+          String(params.organizationId ?? ''),
+          'organizationId',
+        );
+        const rawBody = (await request.json().catch(() => null)) as CreateInvitationInput | null;
+        if (!rawBody || typeof rawBody !== 'object') {
+          throw new ValidationError('Invalid JSON body for invitation creation.');
+        }
+
+        const result = await services.invitations.createInvitation(actorUserId, organizationId, {
+          ...rawBody,
+          correlationId: asCorrelationId(isUuid(correlationId) ? correlationId : nextUuid()),
+        });
+
+        return buildSuccessResponse(result, correlationId, now, 201);
+      }),
+    ),
+
+    http.post(
+      '*/api/v1/organizations/:organizationId/invitations/:invitationId/revoke',
+      withSimulatedEndpoint(deps, async ({ request, params, correlationId, now, nextUuid }) => {
+        const actorUserId = requireActorUserId(request);
+        const organizationId = asOrganizationId(
+          String(params.organizationId ?? ''),
+          'organizationId',
+        );
+        const invitationId = asInvitationId(String(params.invitationId ?? ''), 'invitationId');
+
+        const revoked = await services.invitations.revokeInvitation(
+          actorUserId,
+          organizationId,
+          invitationId,
+          {
+            correlationId: asCorrelationId(isUuid(correlationId) ? correlationId : nextUuid()),
+          },
+        );
+
+        return buildSuccessResponse(revoked, correlationId, now, 200);
+      }),
+    ),
+
+    http.get(
+      '*/api/v1/invitations/preview',
+      withSimulatedEndpoint(deps, async ({ request, correlationId, now }) => {
+        const actorUserId = requireActorUserId(request);
+        const url = new URL(request.url);
+        const code = url.searchParams.get('code') ?? '';
+
+        const preview = await services.invitations.previewInvitationByCode(actorUserId, code);
+        return buildSuccessResponse(preview, correlationId, now, 200);
+      }),
+    ),
+
+    http.post(
+      '*/api/v1/invitations/accept',
+      withSimulatedEndpoint(deps, async ({ request, correlationId, now, nextUuid }) => {
+        const actorUserId = requireActorUserId(request);
+        const rawBody = (await request.json().catch(() => null)) as {
+          readonly code?: string;
+        } | null;
+
+        if (!rawBody || typeof rawBody.code !== 'string') {
+          throw new ValidationError('Field "code" is required to accept an invitation.');
+        }
+
+        const accepted = await services.invitations.acceptInvitation(actorUserId, rawBody.code, {
+          correlationId: asCorrelationId(isUuid(correlationId) ? correlationId : nextUuid()),
+        });
+
+        return buildSuccessResponse(accepted, correlationId, now, 200);
+      }),
+    ),
+
+    // -------------------------------------------------------------------------
+    // Phase 05 — Teams & Team Members (delegating strictly to TeamService)
+    // -------------------------------------------------------------------------
+    http.get(
+      '*/api/v1/organizations/:organizationId/teams',
+      withSimulatedEndpoint(deps, async ({ request, params, correlationId, now }) => {
+        const actorUserId = requireActorUserId(request);
+        const organizationId = asOrganizationId(
+          String(params.organizationId ?? ''),
+          'organizationId',
+        );
+        const url = new URL(request.url);
+        const includeArchived = url.searchParams.get('includeArchived') === 'true';
+
+        const teams = await services.teams.listTeams(actorUserId, organizationId, {
+          includeArchived,
+        });
+        return buildSuccessResponse(teams, correlationId, now, 200);
+      }),
+    ),
+
+    http.post(
+      '*/api/v1/organizations/:organizationId/teams',
+      withSimulatedEndpoint(deps, async ({ request, params, correlationId, now, nextUuid }) => {
+        const actorUserId = requireActorUserId(request);
+        const organizationId = asOrganizationId(
+          String(params.organizationId ?? ''),
+          'organizationId',
+        );
+        const rawBody = (await request.json().catch(() => null)) as CreateTeamInput | null;
+        if (!rawBody || typeof rawBody !== 'object') {
+          throw new ValidationError('Invalid JSON body for team creation.');
+        }
+
+        const created = await services.teams.createTeam(actorUserId, organizationId, {
+          ...rawBody,
+          correlationId: asCorrelationId(isUuid(correlationId) ? correlationId : nextUuid()),
+        });
+
+        return buildSuccessResponse(created, correlationId, now, 201);
+      }),
+    ),
+
+    http.get(
+      '*/api/v1/organizations/:organizationId/teams/:teamId',
+      withSimulatedEndpoint(deps, async ({ request, params, correlationId, now }) => {
+        const actorUserId = requireActorUserId(request);
+        const organizationId = asOrganizationId(
+          String(params.organizationId ?? ''),
+          'organizationId',
+        );
+        const teamId = asTeamId(String(params.teamId ?? ''), 'teamId');
+
+        const details = await services.teams.getTeamDetails(actorUserId, organizationId, teamId);
+        return buildSuccessResponse(details, correlationId, now, 200);
+      }),
+    ),
+
+    http.patch(
+      '*/api/v1/organizations/:organizationId/teams/:teamId',
+      withSimulatedEndpoint(deps, async ({ request, params, correlationId, now, nextUuid }) => {
+        const actorUserId = requireActorUserId(request);
+        const organizationId = asOrganizationId(
+          String(params.organizationId ?? ''),
+          'organizationId',
+        );
+        const teamId = asTeamId(String(params.teamId ?? ''), 'teamId');
+        const rawBody = (await request.json().catch(() => null)) as
+          (UpdateTeamInput & { readonly managerUserIds?: readonly UserId[] }) | null;
+
+        if (!rawBody || typeof rawBody !== 'object') {
+          throw new ValidationError('Invalid JSON body for team update.');
+        }
+
+        const correlationUuid = asCorrelationId(isUuid(correlationId) ? correlationId : nextUuid());
+        let updatedTeam;
+
+        if (rawBody.name !== undefined || rawBody.description !== undefined) {
+          updatedTeam = await services.teams.updateTeam(actorUserId, organizationId, teamId, {
+            ...(rawBody.name !== undefined ? { name: rawBody.name } : {}),
+            ...(rawBody.description !== undefined ? { description: rawBody.description } : {}),
+            correlationId: correlationUuid,
+          });
+        }
+
+        if (rawBody.managerUserIds !== undefined) {
+          updatedTeam = await services.teams.setTeamManagers(
+            actorUserId,
+            organizationId,
+            teamId,
+            rawBody.managerUserIds,
+            { correlationId: correlationUuid },
+          );
+        }
+
+        if (updatedTeam === undefined) {
+          throw new ValidationError(
+            'Team update requires at least "name", "description" or "managerUserIds".',
+          );
+        }
+
+        return buildSuccessResponse(updatedTeam, correlationId, now, 200);
+      }),
+    ),
+
+    http.delete(
+      '*/api/v1/organizations/:organizationId/teams/:teamId',
+      withSimulatedEndpoint(deps, async ({ request, params, correlationId, now, nextUuid }) => {
+        const actorUserId = requireActorUserId(request);
+        const organizationId = asOrganizationId(
+          String(params.organizationId ?? ''),
+          'organizationId',
+        );
+        const teamId = asTeamId(String(params.teamId ?? ''), 'teamId');
+        const rawBody = (await request.json().catch(() => null)) as {
+          readonly reason?: string;
+        } | null;
+
+        const deleted = await services.teams.deleteTeam(actorUserId, organizationId, teamId, {
+          ...(rawBody?.reason !== undefined ? { reason: rawBody.reason } : {}),
+          correlationId: asCorrelationId(isUuid(correlationId) ? correlationId : nextUuid()),
+        });
+
+        return buildSuccessResponse(deleted, correlationId, now, 200);
+      }),
+    ),
+
+    http.post(
+      '*/api/v1/organizations/:organizationId/teams/:teamId/archive',
+      withSimulatedEndpoint(deps, async ({ request, params, correlationId, now, nextUuid }) => {
+        const actorUserId = requireActorUserId(request);
+        const organizationId = asOrganizationId(
+          String(params.organizationId ?? ''),
+          'organizationId',
+        );
+        const teamId = asTeamId(String(params.teamId ?? ''), 'teamId');
+
+        const archived = await services.teams.archiveTeam(actorUserId, organizationId, teamId, {
+          correlationId: asCorrelationId(isUuid(correlationId) ? correlationId : nextUuid()),
+        });
+
+        return buildSuccessResponse(archived, correlationId, now, 200);
+      }),
+    ),
+
+    http.post(
+      '*/api/v1/organizations/:organizationId/teams/:teamId/restore',
+      withSimulatedEndpoint(deps, async ({ request, params, correlationId, now, nextUuid }) => {
+        const actorUserId = requireActorUserId(request);
+        const organizationId = asOrganizationId(
+          String(params.organizationId ?? ''),
+          'organizationId',
+        );
+        const teamId = asTeamId(String(params.teamId ?? ''), 'teamId');
+
+        const restored = await services.teams.restoreTeam(actorUserId, organizationId, teamId, {
+          correlationId: asCorrelationId(isUuid(correlationId) ? correlationId : nextUuid()),
+        });
+
+        return buildSuccessResponse(restored, correlationId, now, 200);
+      }),
+    ),
+
+    http.post(
+      '*/api/v1/organizations/:organizationId/teams/:teamId/members',
+      withSimulatedEndpoint(deps, async ({ request, params, correlationId, now, nextUuid }) => {
+        const actorUserId = requireActorUserId(request);
+        const organizationId = asOrganizationId(
+          String(params.organizationId ?? ''),
+          'organizationId',
+        );
+        const teamId = asTeamId(String(params.teamId ?? ''), 'teamId');
+        const rawBody = (await request.json().catch(() => null)) as {
+          readonly userId?: string;
+        } | null;
+
+        if (!rawBody || typeof rawBody.userId !== 'string') {
+          throw new ValidationError('Field "userId" is required to add a team member.');
+        }
+
+        const member = await services.teams.addTeamMember(
+          actorUserId,
+          organizationId,
+          teamId,
+          asUserId(rawBody.userId, 'userId'),
+          {
+            correlationId: asCorrelationId(isUuid(correlationId) ? correlationId : nextUuid()),
+          },
+        );
+
+        return buildSuccessResponse(member, correlationId, now, 201);
+      }),
+    ),
+
+    http.delete(
+      '*/api/v1/organizations/:organizationId/teams/:teamId/members/:userId',
+      withSimulatedEndpoint(deps, async ({ request, params, correlationId, now, nextUuid }) => {
+        const actorUserId = requireActorUserId(request);
+        const organizationId = asOrganizationId(
+          String(params.organizationId ?? ''),
+          'organizationId',
+        );
+        const teamId = asTeamId(String(params.teamId ?? ''), 'teamId');
+        const targetUserId = asUserId(String(params.userId ?? ''), 'userId');
+
+        const removed = await services.teams.removeTeamMember(
+          actorUserId,
+          organizationId,
+          teamId,
+          targetUserId,
+          {
+            correlationId: asCorrelationId(isUuid(correlationId) ? correlationId : nextUuid()),
+          },
+        );
+
+        return buildSuccessResponse(removed, correlationId, now, 200);
+      }),
+    ),
+
+    // -------------------------------------------------------------------------
+    // Phase 05 — Permissions Management (delegating strictly to AuthorizationManagementService)
+    // -------------------------------------------------------------------------
+    http.get(
+      '*/api/v1/organizations/:organizationId/permissions/me',
+      withSimulatedEndpoint(deps, async ({ request, params, correlationId, now }) => {
+        const actorUserId = requireActorUserId(request);
+        const organizationId = asOrganizationId(
+          String(params.organizationId ?? ''),
+          'organizationId',
+        );
+
+        const rules = await services.authorization.listMyActiveAccessRules(
+          actorUserId,
+          organizationId,
+        );
+        return buildSuccessResponse(rules, correlationId, now, 200);
+      }),
+    ),
+
+    http.get(
+      '*/api/v1/organizations/:organizationId/permissions/grants',
+      withSimulatedEndpoint(deps, async ({ request, params, correlationId, now }) => {
+        const actorUserId = requireActorUserId(request);
+        const organizationId = asOrganizationId(
+          String(params.organizationId ?? ''),
+          'organizationId',
+        );
+
+        const grants = await services.authorization.listOrganizationGrants(
+          actorUserId,
+          organizationId,
+        );
+        return buildSuccessResponse(grants, correlationId, now, 200);
+      }),
+    ),
+
+    http.post(
+      '*/api/v1/organizations/:organizationId/permissions/grants',
+      withSimulatedEndpoint(deps, async ({ request, params, correlationId, now, nextUuid }) => {
+        const actorUserId = requireActorUserId(request);
+        const organizationId = asOrganizationId(
+          String(params.organizationId ?? ''),
+          'organizationId',
+        );
+        const rawBody = (await request.json().catch(() => null)) as GrantPermissionInput | null;
+        if (!rawBody || typeof rawBody !== 'object') {
+          throw new ValidationError('Invalid JSON body for permission grant creation.');
+        }
+
+        const grant = await services.authorization.grantPermission(actorUserId, organizationId, {
+          ...rawBody,
+          correlationId: asCorrelationId(isUuid(correlationId) ? correlationId : nextUuid()),
+        });
+
+        return buildSuccessResponse(grant, correlationId, now, 201);
+      }),
+    ),
+
+    http.post(
+      '*/api/v1/organizations/:organizationId/permissions/grants/:grantId/revoke',
+      withSimulatedEndpoint(deps, async ({ request, params, correlationId, now, nextUuid }) => {
+        const actorUserId = requireActorUserId(request);
+        const organizationId = asOrganizationId(
+          String(params.organizationId ?? ''),
+          'organizationId',
+        );
+        const grantId = asGrantId(String(params.grantId ?? ''), 'grantId');
+        const rawBody = (await request.json().catch(() => null)) as {
+          readonly reason?: string;
+        } | null;
+
+        await services.authorization.revokePermissionGrant(actorUserId, organizationId, grantId, {
+          ...(rawBody?.reason !== undefined ? { reason: rawBody.reason } : {}),
+          correlationId: asCorrelationId(isUuid(correlationId) ? correlationId : nextUuid()),
+        });
+
+        return buildSuccessResponse({ revoked: true, grantId }, correlationId, now, 200);
+      }),
+    ),
+
+    http.get(
+      '*/api/v1/organizations/:organizationId/permissions/denies',
+      withSimulatedEndpoint(deps, async ({ request, params, correlationId, now }) => {
+        const actorUserId = requireActorUserId(request);
+        const organizationId = asOrganizationId(
+          String(params.organizationId ?? ''),
+          'organizationId',
+        );
+
+        const denies = await services.authorization.listOrganizationDenyRules(
+          actorUserId,
+          organizationId,
+        );
+        return buildSuccessResponse(denies, correlationId, now, 200);
+      }),
+    ),
+
+    http.post(
+      '*/api/v1/organizations/:organizationId/permissions/denies',
+      withSimulatedEndpoint(deps, async ({ request, params, correlationId, now, nextUuid }) => {
+        const actorUserId = requireActorUserId(request);
+        const organizationId = asOrganizationId(
+          String(params.organizationId ?? ''),
+          'organizationId',
+        );
+        const rawBody = (await request
+          .json()
+          .catch(() => null)) as CreateExplicitDenyRuleInput | null;
+        if (!rawBody || typeof rawBody !== 'object') {
+          throw new ValidationError('Invalid JSON body for explicit deny rule creation.');
+        }
+
+        const rule = await services.authorization.createExplicitDenyRule(
+          actorUserId,
+          organizationId,
+          {
+            ...rawBody,
+            correlationId: asCorrelationId(isUuid(correlationId) ? correlationId : nextUuid()),
+          },
+        );
+
+        return buildSuccessResponse(rule, correlationId, now, 201);
+      }),
+    ),
+
+    http.post(
+      '*/api/v1/organizations/:organizationId/permissions/denies/:denyRuleId/revoke',
+      withSimulatedEndpoint(deps, async ({ request, params, correlationId, now, nextUuid }) => {
+        const actorUserId = requireActorUserId(request);
+        const organizationId = asOrganizationId(
+          String(params.organizationId ?? ''),
+          'organizationId',
+        );
+        const denyRuleId = asDenyRuleId(String(params.denyRuleId ?? ''), 'denyRuleId');
+        const rawBody = (await request.json().catch(() => null)) as {
+          readonly reason?: string;
+        } | null;
+
+        await services.authorization.revokeExplicitDenyRule(
+          actorUserId,
+          organizationId,
+          denyRuleId,
+          {
+            ...(rawBody?.reason !== undefined ? { reason: rawBody.reason } : {}),
+            correlationId: asCorrelationId(isUuid(correlationId) ? correlationId : nextUuid()),
+          },
+        );
+
+        return buildSuccessResponse({ revoked: true, denyRuleId }, correlationId, now, 200);
       }),
     ),
 

@@ -43,6 +43,18 @@ export interface PermissionGrantRepositoryPort {
     revokedByUserId: UserId,
     revokedAt: IsoDateTime,
   ): Promise<number>;
+
+  /**
+   * Revoga imediatamente todas as concessões de quaisquer usuários vinculadas a um escopo
+   * desativado ou excluído logicamente (ADR-0009 §1.4 & §3.1).
+   */
+  revokeAllByScope(
+    organizationId: OrganizationId,
+    scopeType: PermissionScopeType,
+    scopeId: EntityId,
+    revokedByUserId: UserId,
+    revokedAt: IsoDateTime,
+  ): Promise<number>;
 }
 
 export interface ExplicitDenyRuleRepositoryPort {
