@@ -163,6 +163,25 @@ export function AppShell() {
                         {intl.formatMessage({ id: 'nav.organizations' })}
                       </NavLink>
                     </li>
+                    {activeOrganization !== null ? (
+                      <li>
+                        <NavLink to="/teams" className={navLinkClassName}>
+                          {intl.formatMessage({ id: 'nav.teams' })}
+                        </NavLink>
+                      </li>
+                    ) : null}
+                    <li>
+                      <NavLink to="/invitations" className={navLinkClassName}>
+                        {intl.formatMessage({ id: 'nav.invitations' })}
+                      </NavLink>
+                    </li>
+                    {activeOrganization !== null ? (
+                      <li>
+                        <NavLink to="/permissions" className={navLinkClassName}>
+                          {intl.formatMessage({ id: 'nav.permissions' })}
+                        </NavLink>
+                      </li>
+                    ) : null}
                     <li>
                       <NavLink to="/profile" className={navLinkClassName}>
                         {intl.formatMessage({ id: 'nav.profile' })}
