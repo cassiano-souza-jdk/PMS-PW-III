@@ -5,9 +5,10 @@ import { Link, useNavigate, useSearchParams } from 'react-router';
 import { useComposition } from '@/app/composition';
 import { useAuth, useOrganization, usePermission } from '@/app/providers';
 import type { InvitationPreview } from '@/modules/invitations';
-import { APP_ERROR_CODES, isAppError } from '@/shared/errors';
+import { isAppError } from '@/shared/errors';
 import { getErrorMessageId, type MessageId } from '@/shared/i18n';
 import type { OrganizationRole } from '@/shared/kernel';
+import { resolveAcceptInvitationErrorMessageId } from './invitation-accept-error';
 import {
   Alert,
   AlertDescription,
@@ -123,17 +124,7 @@ export function AcceptInvitationPage() {
       await refreshPermissions();
       await navigate('/organizations', { replace: true });
     } catch (error) {
-      if (isAppError(error) && error.code === APP_ERROR_CODES.CONFLICT) {
-        setAcceptError(intl.formatMessage({ id: 'invitations.accept.alreadyMemberError' }));
-        return;
-      }
-      if (isAppError(error) && error.code === APP_ERROR_CODES.AUTHORIZATION_ERROR) {
-        setAcceptError(intl.formatMessage({ id: 'invitations.accept.emailMismatchWarning' }));
-        return;
-      }
-      const messageId = isAppError(error)
-        ? getErrorMessageId(error.code)
-        : 'errors.UNEXPECTED_ERROR';
+      const messageId = resolveAcceptInvitationErrorMessageId(error);
       setAcceptError(intl.formatMessage({ id: messageId }));
     } finally {
       setIsAccepting(false);
