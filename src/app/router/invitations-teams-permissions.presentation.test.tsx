@@ -2,7 +2,7 @@ import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { IDBFactory, IDBKeyRange } from 'fake-indexeddb';
 import { createMemoryRouter } from 'react-router';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { axe } from 'vitest-axe';
 import { App } from '@/app/App';
 import { createAppContainer, type AppCompositionContainer } from '@/app/composition';
@@ -94,6 +94,9 @@ describe('Invitations, Teams & Permissions Presentation + Routing + Accessibilit
       const primaryNav = screen.getByRole('navigation', {
         name: ptBRMessages['nav.primaryLabel'],
       });
+      expect(
+        within(primaryNav).getByRole('link', { name: ptBRMessages['nav.projects'] }),
+      ).toHaveAttribute('href', '/projects');
 
       // 1. /invitations
       await user.click(
@@ -151,6 +154,9 @@ describe('Invitations, Teams & Permissions Presentation + Routing + Accessibilit
       const primaryNav = screen.getByRole('navigation', {
         name: ptBRMessages['nav.primaryLabel'],
       });
+      expect(
+        within(primaryNav).getByRole('link', { name: ptBRMessages['nav.projects'] }),
+      ).toHaveAttribute('href', '/projects');
 
       await user.click(
         within(primaryNav).getByRole('link', { name: ptBRMessages['nav.permissions'] }),
@@ -341,6 +347,9 @@ describe('Invitations, Teams & Permissions Presentation + Routing + Accessibilit
       const primaryNav = screen.getByRole('navigation', {
         name: ptBRMessages['nav.primaryLabel'],
       });
+      expect(
+        within(primaryNav).getByRole('link', { name: ptBRMessages['nav.projects'] }),
+      ).toHaveAttribute('href', '/projects');
 
       // 1. Validação de UUID inválido em #grant-scope-id (/permissions)
       await user.click(
@@ -368,17 +377,41 @@ describe('Invitations, Teams & Permissions Presentation + Routing + Accessibilit
 
       const firstMemberValue = granteeSelect.options[1]?.value ?? '';
       await user.selectOptions(granteeSelect, firstMemberValue);
-      await user.selectOptions(
-        scopedGrantForm.getByLabelText(ptBRMessages['permissions.grants.scopeTypeLabel'], {
-          exact: false,
-        }),
-        'PROJECT',
+
+      const grantScopeTypeSelect = scopedGrantForm.getByLabelText(
+        ptBRMessages['permissions.grants.scopeTypeLabel'],
+        { exact: false },
       );
 
-      const scopeIdInput = scopedGrantForm.getByLabelText(
+      // Com scopeType === 'PROJECT', #grant-scope-id é um <select> listando o projeto demo semeado
+      await user.selectOptions(grantScopeTypeSelect, 'PROJECT');
+      const projectScopeSelect = await scopedGrantForm.findByLabelText<HTMLSelectElement>(
         ptBRMessages['permissions.grants.scopeIdLabel'],
         { exact: false },
       );
+      expect(projectScopeSelect.tagName).toBe('SELECT');
+      await waitFor(() => {
+        expect(
+          Array.from(projectScopeSelect.options).some((option) =>
+            option.textContent?.includes('Lancamento Plataforma PMS v1'),
+          ),
+        ).toBe(true);
+      });
+      const demoProjectOption = Array.from(projectScopeSelect.options).find((option) =>
+        option.textContent?.includes('Lancamento Plataforma PMS v1'),
+      );
+      expect(demoProjectOption).toBeDefined();
+      await user.selectOptions(projectScopeSelect, demoProjectOption?.value ?? '');
+
+      // Ao trocar para 'RESOURCE', scopeId é limpo e #grant-scope-id renderiza <Input> validando UUID
+      await user.selectOptions(grantScopeTypeSelect, 'RESOURCE');
+
+      const scopeIdInput = scopedGrantForm.getByLabelText<HTMLInputElement>(
+        ptBRMessages['permissions.grants.scopeIdLabel'],
+        { exact: false },
+      );
+      expect(scopeIdInput.tagName).toBe('INPUT');
+      expect(scopeIdInput.value).toBe('');
       await user.type(scopeIdInput, 'uuid-invalido');
       await user.type(
         scopedGrantForm.getByLabelText(ptBRMessages['permissions.grants.reasonLabel'], {
@@ -435,6 +468,11 @@ describe('Invitations, Teams & Permissions Presentation + Routing + Accessibilit
       });
       await user.click(teamButton);
 
+      expect(await screen.findByText('Projetos ativos vinculados: 1')).toBeInTheDocument();
+      expect(
+        screen.getByText(ptBRMessages['teams.deleteBlockedByActiveProjectsHint']),
+      ).toBeInTheDocument();
+
       const editTeamNameInput = await screen.findByDisplayValue('Equipe de Produto e Engenharia');
       await user.clear(editTeamNameInput);
       await user.type(editTeamNameInput, 'A');
@@ -446,6 +484,82 @@ describe('Invitations, Teams & Permissions Presentation + Routing + Accessibilit
       );
       expect(editTeamNameInput).toHaveAttribute('aria-invalid', 'true');
       expect(await axe(container)).toHaveNoViolations();
+    },
+  );
+
+  it(
+    'renderiza /invitations/accept?code=... com AcceptInvitationPanel sem avisos validateDOMNesting e com zero violações vitest-axe',
+    { timeout: 20_000 },
+    async () => {
+      const consoleErrorSpy = vi.spyOn(console, 'error');
+      try {
+        const appContainer = await createIsolatedContainer();
+
+        const admin = await appContainer.services.auth.registerUser({
+          email: 'admin.accept.panel@pms.local',
+          password: 'PasswordForte!2026',
+          displayName: 'Admin Accept Panel',
+          acceptTerms: true,
+          persistent: true,
+        });
+        const { organization } = await appContainer.services.organizations.createOrganization(
+          admin.user.id,
+          { name: 'Org Accept Panel', slug: 'org-accept-panel' },
+        );
+        const createdInvite = await appContainer.services.invitations.createInvitation(
+          admin.user.id,
+          organization.id,
+          { email: 'convidado.panel@pms.local' },
+        );
+
+        await appContainer.services.auth.logoutCurrentSession({
+          actorUserId: admin.user.id,
+          sessionId: admin.session.id,
+        });
+        await appContainer.services.auth.registerUser({
+          email: 'convidado.panel@pms.local',
+          password: 'PasswordForte!2026',
+          displayName: 'Convidado Accept Panel',
+          acceptTerms: true,
+          persistent: true,
+        });
+
+        const { container, unmount } = await renderIsolatedApp(
+          `/invitations/accept?code=${encodeURIComponent(createdInvite.invitation.code)}`,
+          appContainer,
+        );
+
+        const heading = await screen.findByRole('heading', {
+          level: 1,
+          name: ptBRMessages['invitations.accept.title'],
+        });
+        expect(heading.closest('h2')).toBeNull();
+        expect(await screen.findByText(/Org Accept Panel/)).toBeInTheDocument();
+        expect(
+          await screen.findByRole('button', {
+            name: ptBRMessages['invitations.accept.acceptAction'],
+          }),
+        ).toBeEnabled();
+        const mainRegion = screen.getByRole('main');
+        expect(
+          within(mainRegion).getByRole('link', { name: ptBRMessages['nav.invitations'] }),
+        ).toHaveAttribute('href', '/invitations');
+        expect(await axe(container)).toHaveNoViolations();
+        unmount();
+
+        const missingCodeView = await renderIsolatedApp('/invitations/accept', appContainer);
+        expect(
+          await screen.findByText(ptBRMessages['invitations.accept.missingCodeWarning']),
+        ).toBeInTheDocument();
+        expect(await axe(missingCodeView.container)).toHaveNoViolations();
+
+        const domNestingWarnings = consoleErrorSpy.mock.calls.filter((args) =>
+          args.some((arg) => typeof arg === 'string' && arg.includes('validateDOMNesting')),
+        );
+        expect(domNestingWarnings).toHaveLength(0);
+      } finally {
+        consoleErrorSpy.mockRestore();
+      }
     },
   );
 });

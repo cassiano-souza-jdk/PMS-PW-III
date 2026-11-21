@@ -392,13 +392,21 @@ export function TeamsPanel({
                 <CardHeader className="space-y-2">
                   <div className="flex flex-wrap items-center justify-between gap-2">
                     <CardTitle>{selectedTeamDetails.team.name}</CardTitle>
-                    <Badge variant={selectedTeamIsArchived ? 'outline' : 'default'}>
-                      {intl.formatMessage({
-                        id: selectedTeamIsArchived
-                          ? 'teams.status.ARCHIVED'
-                          : 'teams.status.ACTIVE',
-                      })}
-                    </Badge>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <Badge variant="outline">
+                        {intl.formatMessage(
+                          { id: 'teams.activeProjectsCountLabel' },
+                          { count: selectedTeamDetails.activeProjectCount },
+                        )}
+                      </Badge>
+                      <Badge variant={selectedTeamIsArchived ? 'outline' : 'default'}>
+                        {intl.formatMessage({
+                          id: selectedTeamIsArchived
+                            ? 'teams.status.ARCHIVED'
+                            : 'teams.status.ACTIVE',
+                        })}
+                      </Badge>
+                    </div>
                   </div>
                 </CardHeader>
 
@@ -457,55 +465,65 @@ export function TeamsPanel({
                     </p>
                   ) : null}
 
-                  <div className="flex flex-wrap items-center gap-2 border-t pt-4">
-                    {canArchiveSelectedTeam ? (
-                      selectedTeamIsArchived ? (
-                        <Button
-                          type="button"
-                          size="sm"
-                          variant="secondary"
-                          disabled={isMutatingTeam}
-                          onClick={() =>
-                            void onRestoreTeam(
-                              selectedTeamDetails.team.id,
-                              selectedTeamDetails.team.name,
-                            )
-                          }
-                        >
-                          <IconArchiveOff className="h-4 w-4" aria-hidden="true" />
-                          <span>{intl.formatMessage({ id: 'teams.restoreAction' })}</span>
-                        </Button>
-                      ) : (
-                        <Button
-                          type="button"
-                          size="sm"
-                          variant="outline"
-                          disabled={isMutatingTeam}
-                          onClick={() =>
-                            void onArchiveTeam(
-                              selectedTeamDetails.team.id,
-                              selectedTeamDetails.team.name,
-                            )
-                          }
-                        >
-                          <IconArchive className="h-4 w-4" aria-hidden="true" />
-                          <span>{intl.formatMessage({ id: 'teams.archiveAction' })}</span>
-                        </Button>
-                      )
+                  <div className="space-y-3 border-t pt-4">
+                    {canDeleteSelectedTeam && selectedTeamDetails.activeProjectCount > 0 ? (
+                      <Alert variant="warning" role="status">
+                        <AlertDescription>
+                          {intl.formatMessage({ id: 'teams.deleteBlockedByActiveProjectsHint' })}
+                        </AlertDescription>
+                      </Alert>
                     ) : null}
 
-                    {canDeleteSelectedTeam && !confirmDeleteTeam ? (
-                      <Button
-                        type="button"
-                        size="sm"
-                        variant="destructive"
-                        disabled={isMutatingTeam}
-                        onClick={() => setConfirmDeleteTeam(true)}
-                      >
-                        <IconTrash className="h-4 w-4" aria-hidden="true" />
-                        <span>{intl.formatMessage({ id: 'teams.deleteAction' })}</span>
-                      </Button>
-                    ) : null}
+                    <div className="flex flex-wrap items-center gap-2">
+                      {canArchiveSelectedTeam ? (
+                        selectedTeamIsArchived ? (
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant="secondary"
+                            disabled={isMutatingTeam}
+                            onClick={() =>
+                              void onRestoreTeam(
+                                selectedTeamDetails.team.id,
+                                selectedTeamDetails.team.name,
+                              )
+                            }
+                          >
+                            <IconArchiveOff className="h-4 w-4" aria-hidden="true" />
+                            <span>{intl.formatMessage({ id: 'teams.restoreAction' })}</span>
+                          </Button>
+                        ) : (
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant="outline"
+                            disabled={isMutatingTeam}
+                            onClick={() =>
+                              void onArchiveTeam(
+                                selectedTeamDetails.team.id,
+                                selectedTeamDetails.team.name,
+                              )
+                            }
+                          >
+                            <IconArchive className="h-4 w-4" aria-hidden="true" />
+                            <span>{intl.formatMessage({ id: 'teams.archiveAction' })}</span>
+                          </Button>
+                        )
+                      ) : null}
+
+                      {canDeleteSelectedTeam && !confirmDeleteTeam ? (
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="destructive"
+                          disabled={isMutatingTeam}
+                          onClick={() => setConfirmDeleteTeam(true)}
+                        >
+                          <IconTrash className="h-4 w-4" aria-hidden="true" />
+                          <span>{intl.formatMessage({ id: 'teams.deleteAction' })}</span>
+                        </Button>
+                      ) : null}
+                    </div>
                   </div>
 
                   {confirmDeleteTeam ? (

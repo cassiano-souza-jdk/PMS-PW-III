@@ -1,39 +1,15 @@
-import { IconArrowLeft, IconCheck } from '@tabler/icons-react';
+import { IconArrowLeft } from '@tabler/icons-react';
 import { useEffect, useState } from 'react';
 import { useIntl } from 'react-intl';
 import { Link, useNavigate, useSearchParams } from 'react-router';
 import { useComposition } from '@/app/composition';
 import { useAuth, useOrganization, usePermission } from '@/app/providers';
 import type { InvitationPreview } from '@/modules/invitations';
+import { AcceptInvitationPanel } from '@/modules/invitations/presentation/accept-invitation-panel';
 import { isAppError } from '@/shared/errors';
-import { getErrorMessageId, type MessageId } from '@/shared/i18n';
-import type { OrganizationRole } from '@/shared/kernel';
+import { getErrorMessageId } from '@/shared/i18n';
+import { Button } from '@/shared/ui';
 import { resolveAcceptInvitationErrorMessageId } from './invitation-accept-error';
-import {
-  Alert,
-  AlertDescription,
-  Badge,
-  Button,
-  Card,
-  CardContent,
-  CardDescription,
-  CardFooter,
-  CardHeader,
-  CardTitle,
-} from '@/shared/ui';
-
-const ROLE_LABEL_ID_BY_CODE: Readonly<Record<OrganizationRole, MessageId>> = {
-  ADMIN: 'roles.ADMIN',
-  MANAGER: 'roles.MANAGER',
-  MEMBER: 'roles.MEMBER',
-};
-
-const STATUS_LABEL_ID_BY_CODE: Readonly<Record<InvitationPreview['status'], MessageId>> = {
-  PENDING: 'invitations.status.PENDING',
-  ACCEPTED: 'invitations.status.ACCEPTED',
-  EXPIRED: 'invitations.status.EXPIRED',
-  REVOKED: 'invitations.status.REVOKED',
-};
 
 interface LoadedPreviewState {
   readonly loadedCode: string | null;
@@ -132,115 +108,23 @@ export function AcceptInvitationPage() {
   };
 
   return (
-    <section
-      aria-labelledby="accept-invitation-heading"
-      className="mx-auto w-full max-w-xl space-y-6"
-    >
-      <Card>
-        <CardHeader>
-          <CardTitle>
-            <h1 id="accept-invitation-heading" className="text-2xl font-bold tracking-tight">
-              {intl.formatMessage({ id: 'invitations.accept.title' })}
-            </h1>
-          </CardTitle>
-          <CardDescription>
-            {intl.formatMessage({ id: 'invitations.accept.description' })}
-          </CardDescription>
-        </CardHeader>
-
-        <CardContent className="space-y-4">
-          {codeParam.length === 0 ? (
-            <Alert variant="warning">
-              <AlertDescription>
-                Nenhum código de convite foi informado na URL. Utilize a página de Convites para
-                digitar um código manualmente.
-              </AlertDescription>
-            </Alert>
-          ) : isLoading ? (
-            <p role="status" aria-live="polite" className="text-sm text-muted-foreground">
-              {intl.formatMessage({ id: 'app.loading' })}
-            </p>
-          ) : loadError !== null ? (
-            <Alert variant="destructive">
-              <AlertDescription>{loadError}</AlertDescription>
-            </Alert>
-          ) : preview !== null ? (
-            <div className="space-y-4">
-              {acceptError !== null ? (
-                <Alert variant="destructive">
-                  <AlertDescription>{acceptError}</AlertDescription>
-                </Alert>
-              ) : null}
-
-              <div className="space-y-2 rounded-lg border bg-muted/30 p-4">
-                <div className="flex flex-wrap items-center justify-between gap-2">
-                  <p className="font-semibold text-foreground">
-                    {intl.formatMessage(
-                      { id: 'invitations.accept.organizationLabel' },
-                      { name: preview.organizationName },
-                    )}
-                  </p>
-                  <Badge variant={preview.status === 'PENDING' ? 'default' : 'destructive'}>
-                    {intl.formatMessage({ id: STATUS_LABEL_ID_BY_CODE[preview.status] })}
-                  </Badge>
-                </div>
-
-                <p className="text-xs text-muted-foreground">
-                  {intl.formatMessage(
-                    { id: 'invitations.accept.roleLabel' },
-                    {
-                      role: intl.formatMessage({ id: ROLE_LABEL_ID_BY_CODE[preview.initialRole] }),
-                    },
-                  )}
-                </p>
-                <p className="text-xs text-muted-foreground">
-                  {intl.formatMessage(
-                    { id: 'invitations.accept.expiresLabel' },
-                    {
-                      date: intl.formatDate(preview.expiresAt, {
-                        dateStyle: 'short',
-                        timeStyle: 'short',
-                      }),
-                    },
-                  )}
-                </p>
-              </div>
-
-              {!preview.emailMatchesActor ? (
-                <Alert variant="warning">
-                  <AlertDescription>
-                    {intl.formatMessage({ id: 'invitations.accept.emailMismatchWarning' })}
-                  </AlertDescription>
-                </Alert>
-              ) : null}
-
-              <Button
-                type="button"
-                disabled={isAccepting || preview.status !== 'PENDING' || !preview.emailMatchesActor}
-                onClick={() => void handleAccept()}
-                className="w-full"
-              >
-                <IconCheck className="h-4 w-4" aria-hidden="true" />
-                <span>
-                  {intl.formatMessage({
-                    id: isAccepting ? 'auth.common.submitting' : 'invitations.accept.acceptAction',
-                  })}
-                </span>
-              </Button>
-            </div>
-          ) : null}
-        </CardContent>
-
-        <CardFooter className="border-t pt-4">
-          <Button asChild variant="ghost" size="sm">
-            <Link to="/invitations">
-              <IconArrowLeft className="h-4 w-4" aria-hidden="true" />
-              <span>{intl.formatMessage({ id: 'nav.invitations' })}</span>
-            </Link>
-          </Button>
-        </CardFooter>
-      </Card>
-    </section>
+    <AcceptInvitationPanel
+      codeParam={codeParam}
+      isLoading={isLoading}
+      loadError={loadError}
+      preview={preview}
+      isAccepting={isAccepting}
+      acceptError={acceptError}
+      onAccept={handleAccept}
+      footerSlot={
+        <Button asChild variant="ghost" size="sm">
+          <Link to="/invitations">
+            <IconArrowLeft className="h-4 w-4" aria-hidden="true" />
+            <span>{intl.formatMessage({ id: 'nav.invitations' })}</span>
+          </Link>
+        </Button>
+      }
+    />
   );
 }
 
