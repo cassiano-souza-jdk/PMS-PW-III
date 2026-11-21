@@ -11,6 +11,8 @@ import {
   LazyOrganizationsPage,
   LazyPermissionsPage,
   LazyProfilePage,
+  LazyProjectBoardPage,
+  LazyProjectsPage,
   LazyRecoverPasswordPage,
   LazyRegisterPage,
   LazyTeamsPage,
@@ -52,6 +54,14 @@ export const appRoutes: RouteObject[] = [
           {
             path: 'teams',
             element: <LazyTeamsPage />,
+          },
+          {
+            path: 'projects',
+            element: <LazyProjectsPage />,
+          },
+          {
+            path: 'projects/:projectId/board',
+            element: <LazyProjectBoardPage />,
           },
           {
             path: 'invitations',
