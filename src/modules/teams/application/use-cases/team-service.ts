@@ -194,12 +194,16 @@ export class TeamService {
       this.deps.explicitDenyRules.listActiveByTargetUser(organizationId, actorUserId, now),
     ]);
 
+    const activeTeamIdSet = new Set(
+      orgTeams.filter((team) => !isSoftDeleted(team)).map((team) => team.id),
+    );
+
     const managedTeamIds: TeamId[] = orgTeams
       .filter((team) => !isSoftDeleted(team) && team.managerUserIds.includes(actorUserId))
       .map((team) => team.id);
 
     const memberTeamIds: TeamId[] = actorTeamMemberships
-      .filter((tm) => tm.removedAt === undefined)
+      .filter((tm) => tm.removedAt === undefined && activeTeamIdSet.has(tm.teamId))
       .map((tm) => tm.teamId);
 
     return {
@@ -788,6 +792,17 @@ export class TeamService {
       async () => {
         await this.deps.teams.save(deletedTeam);
 
+        const activeTeamMembers = (
+          await this.deps.teamMembers.listByTeam(validatedOrgId, validatedTeamId)
+        ).filter((member) => member.removedAt === undefined);
+
+        for (const member of activeTeamMembers) {
+          await this.deps.teamMembers.save({
+            ...member,
+            removedAt: now,
+          });
+        }
+
         const revokedGrantsCount = await this.deps.permissionGrants.revokeAllByScope(
           validatedOrgId,
           PERMISSION_SCOPE_TYPES.TEAM,
@@ -810,6 +825,7 @@ export class TeamService {
             deletedAt: now,
             deletionReason: deletedTeam.deletionReason ?? null,
             revokedGrantsCount,
+            removedMembersCount: activeTeamMembers.length,
           },
           result: AUDIT_RESULTS.SUCCESS,
           correlationId,

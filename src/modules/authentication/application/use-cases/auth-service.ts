@@ -271,12 +271,8 @@ export class AuthService {
     organizationId: OrganizationId | undefined,
     actorUserId: UserId,
   ): Promise<OrganizationId | undefined> {
-    if (organizationId === undefined) {
+    if (organizationId === undefined || this.deps.isActiveOrganizationMember === undefined) {
       return undefined;
-    }
-
-    if (this.deps.isActiveOrganizationMember === undefined) {
-      return organizationId;
     }
 
     const isActiveMember = await this.deps.isActiveOrganizationMember(organizationId, actorUserId);

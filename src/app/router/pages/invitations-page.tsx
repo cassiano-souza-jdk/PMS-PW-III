@@ -14,8 +14,9 @@ import {
   InvitationsPanel,
   type InvitationPanelFeedback,
 } from '@/modules/invitations/presentation/invitations-panel';
-import { APP_ERROR_CODES, isAppError } from '@/shared/errors';
+import { isAppError } from '@/shared/errors';
 import { getErrorMessageId } from '@/shared/i18n';
+import { resolveAcceptInvitationErrorMessageId } from './invitation-accept-error';
 
 interface LoadedInvitationsState {
   readonly contextKey: string | null;
@@ -150,23 +151,7 @@ export function InvitationsPage() {
         ),
       });
     } catch (error) {
-      if (isAppError(error) && error.code === APP_ERROR_CODES.CONFLICT) {
-        setAcceptFeedback({
-          type: 'destructive',
-          message: intl.formatMessage({ id: 'invitations.accept.alreadyMemberError' }),
-        });
-        return;
-      }
-      if (isAppError(error) && error.code === APP_ERROR_CODES.AUTHORIZATION_ERROR) {
-        setAcceptFeedback({
-          type: 'destructive',
-          message: intl.formatMessage({ id: 'invitations.accept.emailMismatchWarning' }),
-        });
-        return;
-      }
-      const messageId = isAppError(error)
-        ? getErrorMessageId(error.code)
-        : 'errors.UNEXPECTED_ERROR';
+      const messageId = resolveAcceptInvitationErrorMessageId(error);
       setAcceptFeedback({
         type: 'destructive',
         message: intl.formatMessage({ id: messageId }),

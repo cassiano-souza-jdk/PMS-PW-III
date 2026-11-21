@@ -4,6 +4,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from
 import type { AuditEvent } from '@/modules/audit';
 import { DEMO_SEED_VERSION, MAINTENANCE_ACTIONS } from '@/modules/demo';
 import type { Project } from '@/modules/projects';
+import type { UpdateMyProfileInput, User } from '@/modules/users';
 import { AuthenticationError, AuthorizationError, InfrastructureError } from '@/shared/errors';
 import {
   MEMBERSHIP_STATUSES,
@@ -472,6 +473,47 @@ describe('MSW v2 Server + HttpClient + Demo Organization Seed + RBAC/ABAC Integr
       const healthRecoveredAfterNet =
         await container.httpClient.get<HealthEndpointResponse>('/health');
       expect(healthRecoveredAfterNet.status).toBe('ok');
+    });
+
+    it('PATCH /api/v1/users/me com x-organization-id de organização alheia (fallback resolveMswServices sem deps.services) NÃO grava AuditEvent na organização alheia', async () => {
+      await container.seedDemoOrganization(FIXED_NOW);
+
+      await container.repositories.organizations.organizations.save({
+        id: OTHER_ORG_ID,
+        name: 'Organizacao Alheia MSW',
+        slug: 'org-alheia-msw',
+        isDemo: false,
+        createdByUserId: OTHER_USER_ID,
+        createdAt: FIXED_NOW,
+        updatedAt: FIXED_NOW,
+      });
+
+      const foreignAuditBefore = await container.repositories.audit.auditEvents.listByOrganization(
+        OTHER_ORG_ID,
+        { page: 1, pageSize: 20 },
+      );
+
+      const updatedProfile = await container.httpClient.patch<User, UpdateMyProfileInput>(
+        '/users/me',
+        {
+          displayName: 'Membro Demo Atualizado Sem Vazamento',
+        },
+        {
+          actorUserId: DEMO_MEMBER_USER_ID,
+          organizationId: OTHER_ORG_ID,
+        },
+      );
+
+      expect(updatedProfile.displayName).toBe('Membro Demo Atualizado Sem Vazamento');
+
+      const foreignAuditAfter = await container.repositories.audit.auditEvents.listByOrganization(
+        OTHER_ORG_ID,
+        { page: 1, pageSize: 20 },
+      );
+      expect(foreignAuditAfter.total).toBe(foreignAuditBefore.total);
+      expect(foreignAuditAfter.items.some((event) => event.actorId === DEMO_MEMBER_USER_ID)).toBe(
+        false,
+      );
     });
   });
 });

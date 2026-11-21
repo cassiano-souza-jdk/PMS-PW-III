@@ -2,7 +2,11 @@ import { IDBFactory, IDBKeyRange } from 'fake-indexeddb';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { createAppContainer, type AppCompositionContainer } from '@/app/composition';
 import { InMemoryEphemeralSessionPointer } from '@/modules/authentication/infrastructure/session/ephemeral-session-pointer';
-import { DEFAULT_INVITATION_EXPIRY_DAYS, INVITATION_STATUSES } from '@/modules/invitations';
+import {
+  DEFAULT_INVITATION_EXPIRY_DAYS,
+  INVITATION_ERROR_REASONS,
+  INVITATION_STATUSES,
+} from '@/modules/invitations';
 import { asOrganizationMemberId } from '@/modules/organizations';
 import { AuthorizationError, ConflictError } from '@/shared/errors';
 import {
@@ -252,39 +256,42 @@ describe('InvitationService Integration (Nominal Invitations, RBAC & Membership 
         { email: target.user.email },
       );
 
-      // 1. Usuário com e-mail divergente recebe AuthorizationError
-      await expect(
-        container.services.invitations.acceptInvitation(
-          wrongUser.user.id,
-          targetInvite.invitation.code,
-        ),
-      ).rejects.toThrowError(AuthorizationError);
+      // 1. Usuário com e-mail divergente recebe AuthorizationError com reason EMAIL_MISMATCH
+      const emailMismatchError = await container.services.invitations
+        .acceptInvitation(wrongUser.user.id, targetInvite.invitation.code)
+        .catch((error: unknown) => error);
+      expect(emailMismatchError).toBeInstanceOf(AuthorizationError);
+      expect((emailMismatchError as AuthorizationError).details?.['reason']).toBe(
+        INVITATION_ERROR_REASONS.EMAIL_MISMATCH,
+      );
 
-      // 2. Membro já ACTIVE recebe ConflictError
+      // 2. Membro já ACTIVE recebe ConflictError com reason MEMBER_ALREADY_ACTIVE
       const activeInvite = await container.services.invitations.createInvitation(
         admin.user.id,
         organization.id,
         { email: activeMember.user.email },
       );
-      await expect(
-        container.services.invitations.acceptInvitation(
-          activeMember.user.id,
-          activeInvite.invitation.code,
-        ),
-      ).rejects.toThrowError(ConflictError);
+      const alreadyActiveError = await container.services.invitations
+        .acceptInvitation(activeMember.user.id, activeInvite.invitation.code)
+        .catch((error: unknown) => error);
+      expect(alreadyActiveError).toBeInstanceOf(ConflictError);
+      expect((alreadyActiveError as ConflictError).details?.['reason']).toBe(
+        INVITATION_ERROR_REASONS.MEMBER_ALREADY_ACTIVE,
+      );
 
-      // 3. Membro SUSPENDED recebe AuthorizationError (jamais contorna suspensão!)
+      // 3. Membro SUSPENDED recebe AuthorizationError com reason MEMBER_SUSPENDED (jamais contorna suspensão!)
       const suspendedInvite = await container.services.invitations.createInvitation(
         admin.user.id,
         organization.id,
         { email: suspendedMember.user.email },
       );
-      await expect(
-        container.services.invitations.acceptInvitation(
-          suspendedMember.user.id,
-          suspendedInvite.invitation.code,
-        ),
-      ).rejects.toThrowError(AuthorizationError);
+      const suspendedError = await container.services.invitations
+        .acceptInvitation(suspendedMember.user.id, suspendedInvite.invitation.code)
+        .catch((error: unknown) => error);
+      expect(suspendedError).toBeInstanceOf(AuthorizationError);
+      expect((suspendedError as AuthorizationError).details?.['reason']).toBe(
+        INVITATION_ERROR_REASONS.MEMBER_SUSPENDED,
+      );
 
       const suspendedStillSuspended =
         await container.repositories.organizations.organizationMembers.findByOrganizationAndUser(
@@ -310,13 +317,25 @@ describe('InvitationService Integration (Nominal Invitations, RBAC & Membership 
       );
       expect(auditPage.items.some((event) => event.eventType === 'invitation.accepted')).toBe(true);
 
-      // 5. Tentativa de reuso do mesmo convite falha com ConflictError
-      await expect(
-        container.services.invitations.acceptInvitation(
-          target.user.id,
-          targetInvite.invitation.code,
-        ),
-      ).rejects.toThrowError(ConflictError);
+      // 5. Tentativa de reuso do mesmo convite falha com ConflictError:
+      // enquanto o usuário permanece ACTIVE, retorna MEMBER_ALREADY_ACTIVE; após sair da org (REMOVED), retorna INVITATION_NOT_PENDING
+      const reuseWhileActiveError = await container.services.invitations
+        .acceptInvitation(target.user.id, targetInvite.invitation.code)
+        .catch((error: unknown) => error);
+      expect(reuseWhileActiveError).toBeInstanceOf(ConflictError);
+      expect((reuseWhileActiveError as ConflictError).details?.['reason']).toBe(
+        INVITATION_ERROR_REASONS.MEMBER_ALREADY_ACTIVE,
+      );
+
+      await container.services.organizations.leaveOrganization(target.user.id, organization.id);
+
+      const reuseAfterLeaveError = await container.services.invitations
+        .acceptInvitation(target.user.id, targetInvite.invitation.code)
+        .catch((error: unknown) => error);
+      expect(reuseAfterLeaveError).toBeInstanceOf(ConflictError);
+      expect((reuseAfterLeaveError as ConflictError).details?.['reason']).toBe(
+        INVITATION_ERROR_REASONS.INVITATION_NOT_PENDING,
+      );
     });
   });
 
@@ -348,12 +367,13 @@ describe('InvitationService Integration (Nominal Invitations, RBAC & Membership 
       expect(revoked.status).toBe(INVITATION_STATUSES.REVOKED);
       expect(revoked.revokedByUserId).toBe(admin.user.id);
 
-      await expect(
-        container.services.invitations.acceptInvitation(
-          userRevoked.user.id,
-          inviteToRevoke.invitation.code,
-        ),
-      ).rejects.toThrowError(ConflictError);
+      const revokedAcceptError = await container.services.invitations
+        .acceptInvitation(userRevoked.user.id, inviteToRevoke.invitation.code)
+        .catch((error: unknown) => error);
+      expect(revokedAcceptError).toBeInstanceOf(ConflictError);
+      expect((revokedAcceptError as ConflictError).details?.['reason']).toBe(
+        INVITATION_ERROR_REASONS.INVITATION_NOT_PENDING,
+      );
 
       // Convite com validade de 1 dia que expira após avançar o relógio
       const shortInvite = await container.services.invitations.createInvitation(
@@ -373,12 +393,13 @@ describe('InvitationService Integration (Nominal Invitations, RBAC & Membership 
       );
       expect(expiredPreview.status).toBe(INVITATION_STATUSES.EXPIRED);
 
-      await expect(
-        container.services.invitations.acceptInvitation(
-          userExpired.user.id,
-          shortInvite.invitation.code,
-        ),
-      ).rejects.toThrowError(ConflictError);
+      const expiredAcceptError = await container.services.invitations
+        .acceptInvitation(userExpired.user.id, shortInvite.invitation.code)
+        .catch((error: unknown) => error);
+      expect(expiredAcceptError).toBeInstanceOf(ConflictError);
+      expect((expiredAcceptError as ConflictError).details?.['reason']).toBe(
+        INVITATION_ERROR_REASONS.INVITATION_NOT_PENDING,
+      );
     });
   });
 });

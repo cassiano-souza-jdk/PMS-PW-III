@@ -48,6 +48,7 @@ import type { Logger } from '@/shared/logging';
 import {
   DEFAULT_INVITATION_EXPIRY_DAYS,
   DEFAULT_INVITATION_INITIAL_ROLE,
+  INVITATION_ERROR_REASONS,
   INVITATION_STATUSES,
   asInvitationId,
   assertInvitationCanBeAccepted,
@@ -547,7 +548,10 @@ export class InvitationService {
       throw new AuthorizationError(
         'This invitation was issued for a different email address and cannot be accepted by the current account.',
         {
-          details: { invitationId: invitation.id },
+          details: {
+            reason: INVITATION_ERROR_REASONS.EMAIL_MISMATCH,
+            invitationId: invitation.id,
+          },
         },
       );
     }
@@ -566,7 +570,10 @@ export class InvitationService {
     if (existingMembership !== null) {
       if (existingMembership.status === MEMBERSHIP_STATUSES.ACTIVE) {
         throw new ConflictError('User is already an active member of this organization.', {
-          details: { organizationId: invitation.organizationId },
+          details: {
+            reason: INVITATION_ERROR_REASONS.MEMBER_ALREADY_ACTIVE,
+            organizationId: invitation.organizationId,
+          },
         });
       }
 
@@ -574,7 +581,10 @@ export class InvitationService {
         throw new AuthorizationError(
           'Suspended organization memberships cannot be bypassed by accepting a new invitation.',
           {
-            details: { organizationId: invitation.organizationId },
+            details: {
+              reason: INVITATION_ERROR_REASONS.MEMBER_SUSPENDED,
+              organizationId: invitation.organizationId,
+            },
           },
         );
       }

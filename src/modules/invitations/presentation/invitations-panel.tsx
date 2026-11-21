@@ -41,7 +41,11 @@ const createInvitationSchema = z.object({
     ORGANIZATION_ROLES.MANAGER,
     ORGANIZATION_ROLES.MEMBER,
   ]),
-  expiresInDays: z.coerce.number().int().min(1).max(90),
+  expiresInDays: z.coerce
+    .number()
+    .int('validation.expiryDaysRange')
+    .min(1, 'validation.expiryDaysRange')
+    .max(90, 'validation.expiryDaysRange'),
 });
 
 export type CreateInvitationFormValues = z.infer<typeof createInvitationSchema>;
@@ -413,8 +417,22 @@ export function InvitationsPanel({
                         min={1}
                         max={90}
                         aria-invalid={errors.expiresInDays !== undefined}
+                        aria-describedby={
+                          errors.expiresInDays !== undefined
+                            ? 'invite-expiry-days-error'
+                            : undefined
+                        }
                         {...register('expiresInDays')}
                       />
+                      {errors.expiresInDays !== undefined ? (
+                        <p
+                          id="invite-expiry-days-error"
+                          role="alert"
+                          className="text-xs font-medium text-destructive"
+                        >
+                          {intl.formatMessage({ id: 'validation.expiryDaysRange' })}
+                        </p>
+                      ) : null}
                     </div>
                   </div>
 

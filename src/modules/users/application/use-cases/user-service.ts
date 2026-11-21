@@ -154,17 +154,17 @@ export class UserService {
       updatedAt: now,
     };
 
-    let verifiedAuditOrganizationId: OrganizationId | undefined = input.activeOrganizationId;
+    let verifiedAuditOrganizationId: OrganizationId | undefined;
     if (
-      verifiedAuditOrganizationId !== undefined &&
+      input.activeOrganizationId !== undefined &&
       this.deps.isActiveOrganizationMember !== undefined
     ) {
       const isActiveMember = await this.deps.isActiveOrganizationMember(
-        verifiedAuditOrganizationId,
+        input.activeOrganizationId,
         validatedUserId,
       );
-      if (!isActiveMember) {
-        verifiedAuditOrganizationId = undefined;
+      if (isActiveMember) {
+        verifiedAuditOrganizationId = input.activeOrganizationId;
       }
     }
 

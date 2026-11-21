@@ -182,6 +182,131 @@ describe('AuthorizationManagementService Integration (Grants, Manager Scope Dele
         }),
       ).rejects.toThrowError(AuthorizationError);
     });
+
+    it('impede MANAGER de revogar grant emitido por ADMIN no seu escopo gerenciado, mas permite revogar grant emitido por MANAGER para permissão delegável no escopo gerenciado', async () => {
+      const adminGrant = await container.services.authorization.grantPermission(
+        DEMO_ADMIN_USER_ID,
+        DEMO_ORG_ID,
+        {
+          granteeUserId: DEMO_MEMBER_USER_ID,
+          permission: PERMISSION_CODES.TASK_CREATE,
+          scopeType: PERMISSION_SCOPE_TYPES.PROJECT,
+          scopeId: asEntityId(DEMO_PROJECT_ID),
+          reason: 'Concessao emitida por ADMIN no projeto demo',
+        },
+      );
+
+      await expect(
+        container.services.authorization.revokePermissionGrant(
+          DEMO_MANAGER_USER_ID,
+          DEMO_ORG_ID,
+          adminGrant.id,
+          { reason: 'Tentativa indevida de MANAGER revogar grant de ADMIN' },
+        ),
+      ).rejects.toThrowError(AuthorizationError);
+
+      const grantsBeforeManagerRevoke =
+        await container.services.authorization.listOrganizationGrants(
+          DEMO_ADMIN_USER_ID,
+          DEMO_ORG_ID,
+        );
+      expect(grantsBeforeManagerRevoke.find((g) => g.id === adminGrant.id)?.derivedStatus).toBe(
+        GRANT_STATUSES.ACTIVE,
+      );
+
+      const managerGrant = await container.services.authorization.grantPermission(
+        DEMO_MANAGER_USER_ID,
+        DEMO_ORG_ID,
+        {
+          granteeUserId: DEMO_MEMBER_USER_ID,
+          permission: PERMISSION_CODES.TASK_COMMENT,
+          scopeType: PERMISSION_SCOPE_TYPES.PROJECT,
+          scopeId: asEntityId(DEMO_PROJECT_ID),
+          reason: 'Delegacao operacional emitida por MANAGER no projeto gerenciado',
+        },
+      );
+
+      await container.services.authorization.revokePermissionGrant(
+        DEMO_MANAGER_USER_ID,
+        DEMO_ORG_ID,
+        managerGrant.id,
+        { reason: 'Encerramento da delegacao pelo proprio MANAGER' },
+      );
+
+      const grantsAfterManagerRevoke =
+        await container.services.authorization.listOrganizationGrants(
+          DEMO_ADMIN_USER_ID,
+          DEMO_ORG_ID,
+        );
+      expect(grantsAfterManagerRevoke.find((g) => g.id === managerGrant.id)?.derivedStatus).toBe(
+        GRANT_STATUSES.REVOKED,
+      );
+    });
+
+    it('impede MANAGER de emitir grant tendo ADMIN como destinatário', async () => {
+      await expect(
+        container.services.authorization.grantPermission(DEMO_MANAGER_USER_ID, DEMO_ORG_ID, {
+          granteeUserId: DEMO_ADMIN_USER_ID,
+          permission: PERMISSION_CODES.TASK_CREATE,
+          scopeType: PERMISSION_SCOPE_TYPES.PROJECT,
+          scopeId: asEntityId(DEMO_PROJECT_ID),
+          reason: 'Tentativa de MANAGER conceder permissao a um ADMIN',
+        }),
+      ).rejects.toThrowError(AuthorizationError);
+    });
+
+    it('bloqueia MANAGER sob ExplicitDenyRule ("*") tanto em grantPermission quanto em revokePermissionGrant', async () => {
+      const managerGrant = await container.services.authorization.grantPermission(
+        DEMO_MANAGER_USER_ID,
+        DEMO_ORG_ID,
+        {
+          granteeUserId: DEMO_MEMBER_USER_ID,
+          permission: PERMISSION_CODES.TASK_CREATE,
+          scopeType: PERMISSION_SCOPE_TYPES.PROJECT,
+          scopeId: asEntityId(DEMO_PROJECT_ID),
+          reason: 'Delegacao previa antes da regra de negacao explicita',
+        },
+      );
+
+      await container.services.authorization.createExplicitDenyRule(
+        DEMO_ADMIN_USER_ID,
+        DEMO_ORG_ID,
+        {
+          targetUserId: DEMO_MANAGER_USER_ID,
+          permission: '*',
+          scopeType: PERMISSION_SCOPE_TYPES.ORGANIZATION,
+          reason: 'Bloqueio preventivo de delegacoes pelo MANAGER',
+        },
+      );
+
+      await expect(
+        container.services.authorization.grantPermission(DEMO_MANAGER_USER_ID, DEMO_ORG_ID, {
+          granteeUserId: DEMO_MEMBER_USER_ID,
+          permission: PERMISSION_CODES.TASK_COMMENT,
+          scopeType: PERMISSION_SCOPE_TYPES.PROJECT,
+          scopeId: asEntityId(DEMO_PROJECT_ID),
+          reason: 'Tentativa bloqueada por ExplicitDenyRule',
+        }),
+      ).rejects.toThrowError(AuthorizationError);
+
+      await expect(
+        container.services.authorization.revokePermissionGrant(
+          DEMO_MANAGER_USER_ID,
+          DEMO_ORG_ID,
+          managerGrant.id,
+          { reason: 'Tentativa de revogacao bloqueada por ExplicitDenyRule' },
+        ),
+      ).rejects.toThrowError(AuthorizationError);
+
+      const grantsAfterBlockedAttempts =
+        await container.services.authorization.listOrganizationGrants(
+          DEMO_ADMIN_USER_ID,
+          DEMO_ORG_ID,
+        );
+      expect(grantsAfterBlockedAttempts.find((g) => g.id === managerGrant.id)?.derivedStatus).toBe(
+        GRANT_STATUSES.ACTIVE,
+      );
+    });
   });
 
   describe('createExplicitDenyRule & revokeExplicitDenyRule (Deny Overrides — Cenário 10 §11)', () => {

@@ -379,6 +379,8 @@ export const ptBRMessages = {
   'validation.termsRequired': 'Você precisa aceitar os termos de uso para criar sua conta.',
   'validation.slugFormat': 'O slug deve conter apenas letras minúsculas, números e hífens simples.',
   'validation.urlInvalid': 'Informe uma URL válida iniciada por http:// ou https://.',
+  'validation.uuidInvalid': 'Informe um identificador UUID válido.',
+  'validation.expiryDaysRange': 'Informe uma validade entre 1 e 90 dias.',
 
   'feedback.sessionRestoring': 'Verificando sessão local...',
   'feedback.unauthorizedTitle': 'Acesso restrito',

@@ -9,6 +9,7 @@ import {
   asEntityId,
   asIsoDateTime,
   asUserId,
+  isUuid,
   type GrantId,
   type OrganizationRole,
   type UserId,
@@ -58,24 +59,68 @@ type ScopeTypeValue = GrantPermissionInput['scopeType'];
 type GrantDerivedStatusValue = PermissionGrantWithDerivedStatus['derivedStatus'];
 type DenyRuleIdValue = ExplicitDenyRuleWithActiveFlag['id'];
 
-const grantFormSchema = z.object({
-  granteeUserId: z.string().min(1, 'validation.required'),
-  permission: z.string().min(1, 'validation.required'),
-  scopeType: z.enum(['ORGANIZATION', 'TEAM', 'PROJECT', 'RESOURCE']),
-  scopeId: z.string().optional(),
-  reason: z.string().trim().min(3, 'permissions.reasonMin').max(500),
-  startsAt: z.string().optional(),
-  expiresAt: z.string().optional(),
-});
+const VALIDATION_ERROR_IDS: Readonly<Record<string, MessageId>> = {
+  'validation.required': 'validation.required',
+  'validation.uuidInvalid': 'validation.uuidInvalid',
+  'permissions.reasonMin': 'permissions.reasonMin',
+};
 
-const denyFormSchema = z.object({
-  targetUserId: z.string().min(1, 'validation.required'),
-  permission: z.string().min(1, 'validation.required'),
-  scopeType: z.enum(['ORGANIZATION', 'TEAM', 'PROJECT', 'RESOURCE']),
-  scopeId: z.string().optional(),
-  reason: z.string().trim().min(3, 'permissions.reasonMin').max(500),
-  expiresAt: z.string().optional(),
-});
+function resolveValidationMessageId(code: string | undefined): MessageId {
+  if (code !== undefined && code in VALIDATION_ERROR_IDS) {
+    return VALIDATION_ERROR_IDS[code] ?? 'validation.required';
+  }
+  return 'validation.required';
+}
+
+function validateScopeId(
+  data: { readonly scopeType: ScopeTypeValue; readonly scopeId?: string },
+  ctx: z.RefinementCtx,
+): void {
+  if (data.scopeType === 'ORGANIZATION') {
+    return;
+  }
+
+  const trimmed = data.scopeId?.trim() ?? '';
+  if (trimmed.length === 0) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: 'validation.required',
+      path: ['scopeId'],
+    });
+    return;
+  }
+
+  if (!isUuid(trimmed)) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: 'validation.uuidInvalid',
+      path: ['scopeId'],
+    });
+  }
+}
+
+const grantFormSchema = z
+  .object({
+    granteeUserId: z.string().min(1, 'validation.required').uuid('validation.uuidInvalid'),
+    permission: z.string().min(1, 'validation.required'),
+    scopeType: z.enum(['ORGANIZATION', 'TEAM', 'PROJECT', 'RESOURCE']),
+    scopeId: z.string().optional(),
+    reason: z.string().trim().min(3, 'permissions.reasonMin').max(500),
+    startsAt: z.string().optional(),
+    expiresAt: z.string().optional(),
+  })
+  .superRefine(validateScopeId);
+
+const denyFormSchema = z
+  .object({
+    targetUserId: z.string().min(1, 'validation.required').uuid('validation.uuidInvalid'),
+    permission: z.string().min(1, 'validation.required'),
+    scopeType: z.enum(['ORGANIZATION', 'TEAM', 'PROJECT', 'RESOURCE']),
+    scopeId: z.string().optional(),
+    reason: z.string().trim().min(3, 'permissions.reasonMin').max(500),
+    expiresAt: z.string().optional(),
+  })
+  .superRefine(validateScopeId);
 
 type GrantFormValues = z.infer<typeof grantFormSchema>;
 type DenyFormValues = z.infer<typeof denyFormSchema>;
@@ -205,6 +250,13 @@ export function PermissionsPanel({
   );
 
   const actorRoleLabel = intl.formatMessage({ id: ROLE_LABEL_ID_BY_CODE[actorRole] });
+
+  const renderFieldError = (errorId: string, error: { readonly message?: string } | undefined) =>
+    error !== undefined ? (
+      <p id={errorId} role="alert" className="text-xs font-medium text-destructive">
+        {intl.formatMessage({ id: resolveValidationMessageId(error.message) })}
+      </p>
+    ) : null;
 
   const handleGrantSubmit = async (values: GrantFormValues) => {
     const matchedPermission = delegablePermissions.find((code) => code === values.permission);
@@ -423,6 +475,11 @@ export function PermissionsPanel({
                     <select
                       id="grant-grantee"
                       aria-invalid={grantForm.formState.errors.granteeUserId !== undefined}
+                      aria-describedby={
+                        grantForm.formState.errors.granteeUserId !== undefined
+                          ? 'grant-grantee-error'
+                          : undefined
+                      }
                       className="flex min-h-[44px] w-full rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
                       {...grantForm.register('granteeUserId')}
                     >
@@ -433,6 +490,10 @@ export function PermissionsPanel({
                         </option>
                       ))}
                     </select>
+                    {renderFieldError(
+                      'grant-grantee-error',
+                      grantForm.formState.errors.granteeUserId,
+                    )}
                   </div>
 
                   <div className="space-y-1.5">
@@ -478,6 +539,12 @@ export function PermissionsPanel({
                       {selectedGrantScopeType === 'TEAM' ? (
                         <select
                           id="grant-scope-id"
+                          aria-invalid={grantForm.formState.errors.scopeId !== undefined}
+                          aria-describedby={
+                            grantForm.formState.errors.scopeId !== undefined
+                              ? 'grant-scope-id-error'
+                              : undefined
+                          }
                           className="flex min-h-[44px] w-full rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
                           {...grantForm.register('scopeId')}
                         >
@@ -493,9 +560,16 @@ export function PermissionsPanel({
                           id="grant-scope-id"
                           type="text"
                           placeholder="UUID do projeto ou recurso"
+                          aria-invalid={grantForm.formState.errors.scopeId !== undefined}
+                          aria-describedby={
+                            grantForm.formState.errors.scopeId !== undefined
+                              ? 'grant-scope-id-error'
+                              : undefined
+                          }
                           {...grantForm.register('scopeId')}
                         />
                       )}
+                      {renderFieldError('grant-scope-id-error', grantForm.formState.errors.scopeId)}
                     </div>
                   ) : null}
 
@@ -695,6 +769,11 @@ export function PermissionsPanel({
                     <select
                       id="deny-target-user"
                       aria-invalid={denyForm.formState.errors.targetUserId !== undefined}
+                      aria-describedby={
+                        denyForm.formState.errors.targetUserId !== undefined
+                          ? 'deny-target-user-error'
+                          : undefined
+                      }
                       className="flex min-h-[44px] w-full rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
                       {...denyForm.register('targetUserId')}
                     >
@@ -705,6 +784,10 @@ export function PermissionsPanel({
                         </option>
                       ))}
                     </select>
+                    {renderFieldError(
+                      'deny-target-user-error',
+                      denyForm.formState.errors.targetUserId,
+                    )}
                   </div>
 
                   <div className="space-y-1.5">
@@ -756,6 +839,12 @@ export function PermissionsPanel({
                       {selectedDenyScopeType === 'TEAM' ? (
                         <select
                           id="deny-scope-id"
+                          aria-invalid={denyForm.formState.errors.scopeId !== undefined}
+                          aria-describedby={
+                            denyForm.formState.errors.scopeId !== undefined
+                              ? 'deny-scope-id-error'
+                              : undefined
+                          }
                           className="flex min-h-[44px] w-full rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
                           {...denyForm.register('scopeId')}
                         >
@@ -771,9 +860,16 @@ export function PermissionsPanel({
                           id="deny-scope-id"
                           type="text"
                           placeholder="UUID do projeto ou recurso"
+                          aria-invalid={denyForm.formState.errors.scopeId !== undefined}
+                          aria-describedby={
+                            denyForm.formState.errors.scopeId !== undefined
+                              ? 'deny-scope-id-error'
+                              : undefined
+                          }
                           {...denyForm.register('scopeId')}
                         />
                       )}
+                      {renderFieldError('deny-scope-id-error', denyForm.formState.errors.scopeId)}
                     </div>
                   ) : null}
 

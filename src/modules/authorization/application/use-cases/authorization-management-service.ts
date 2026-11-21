@@ -21,6 +21,7 @@ import {
   type GrantId,
   type IsoDateTime,
   type OrganizationId,
+  type OrganizationRole,
   type ProjectId,
   type TeamId,
   type TransactionPort,
@@ -42,6 +43,7 @@ import {
   type PermissionScopeType,
 } from '../../domain/grants';
 import {
+  MANAGER_DELEGABLE_PERMISSIONS,
   PERMISSION_CODES,
   isPermissionCode,
   type PermissionCode,
@@ -201,6 +203,48 @@ function isScopeManagedByManager(
 
   if (scopeType === PERMISSION_SCOPE_TYPES.PROJECT) {
     return managedProjectIds.some((id) => (id as string) === (scopeId as string));
+  }
+
+  return false;
+}
+
+function isActorBlockedByExplicitDeny(
+  explicitDenies: readonly ExplicitDenyRule[],
+  role: OrganizationRole,
+  targetPermission: PermissionCode,
+  scopeType: PermissionScopeType,
+  scopeId: EntityId | undefined,
+  now: IsoDateTime,
+): boolean {
+  for (const rule of explicitDenies) {
+    if (!isDenyRuleActiveAt(rule, now)) {
+      continue;
+    }
+
+    const scopeMatches =
+      rule.scopeType === PERMISSION_SCOPE_TYPES.ORGANIZATION ||
+      (rule.scopeType === scopeType &&
+        rule.scopeId !== undefined &&
+        scopeId !== undefined &&
+        (rule.scopeId as string) === (scopeId as string));
+
+    if (!scopeMatches) {
+      continue;
+    }
+
+    if (
+      role === ORGANIZATION_ROLES.ADMIN &&
+      (rule.permission === '*' || rule.permission === PERMISSION_CODES.ORGANIZATION_ROLES_MANAGE)
+    ) {
+      return true;
+    }
+
+    if (
+      role === ORGANIZATION_ROLES.MANAGER &&
+      (rule.permission === '*' || rule.permission === targetPermission)
+    ) {
+      return true;
+    }
   }
 
   return false;
@@ -428,10 +472,22 @@ export class AuthorizationManagementService {
       });
     }
 
-    const [membership, scopes] = await Promise.all([
-      this.deps.contextLookup.getOrganizationMembership(validatedOrgId, validatedActorId),
-      this.deps.contextLookup.getActorScopeSummary(validatedOrgId, validatedActorId),
-    ]);
+    const granteeUserId = asUserId(parsed.granteeUserId, 'granteeUserId');
+    const scopeId =
+      parsed.scopeId !== undefined ? asEntityId(parsed.scopeId, 'scopeId') : undefined;
+
+    const [membership, scopes, actorExplicitDenies, granteeMembership, scopeExists] =
+      await Promise.all([
+        this.deps.contextLookup.getOrganizationMembership(validatedOrgId, validatedActorId),
+        this.deps.contextLookup.getActorScopeSummary(validatedOrgId, validatedActorId),
+        this.deps.explicitDenyRules.listActiveByTargetUser(validatedOrgId, validatedActorId, now),
+        this.deps.contextLookup.getOrganizationMembership(validatedOrgId, granteeUserId),
+        this.deps.contextLookup.scopeExistsInOrganization(
+          validatedOrgId,
+          parsed.scopeType,
+          scopeId,
+        ),
+      ]);
 
     if (!membership || membership.status !== MEMBERSHIP_STATUSES.ACTIVE) {
       throw new AuthorizationError(
@@ -439,16 +495,29 @@ export class AuthorizationManagementService {
       );
     }
 
-    const granteeUserId = asUserId(parsed.granteeUserId, 'granteeUserId');
-    const scopeId =
-      parsed.scopeId !== undefined ? asEntityId(parsed.scopeId, 'scopeId') : undefined;
+    if (
+      isActorBlockedByExplicitDeny(
+        actorExplicitDenies,
+        membership.role,
+        parsed.permission,
+        parsed.scopeType,
+        scopeId,
+        now,
+      )
+    ) {
+      throw new AuthorizationError(
+        `Actor is explicitly denied from delegating "${parsed.permission}" on scope "${parsed.scopeType}".`,
+        {
+          details: {
+            permission: parsed.permission,
+            scopeType: parsed.scopeType,
+            scopeId,
+          },
+        },
+      );
+    }
 
-    const [granteeIsActive, scopeExists] = await Promise.all([
-      this.deps.contextLookup.isActiveOrganizationMember(validatedOrgId, granteeUserId),
-      this.deps.contextLookup.scopeExistsInOrganization(validatedOrgId, parsed.scopeType, scopeId),
-    ]);
-
-    if (!granteeIsActive) {
+    if (granteeMembership === null || granteeMembership.status !== MEMBERSHIP_STATUSES.ACTIVE) {
       throw new NotFoundError('Grantee must be an active member of the organization.', {
         details: { organizationId: validatedOrgId, granteeUserId },
       });
@@ -457,6 +526,15 @@ export class AuthorizationManagementService {
     if (!scopeExists) {
       throw new NotFoundError('Target permission scope was not found in this organization.', {
         details: { organizationId: validatedOrgId, scopeType: parsed.scopeType, scopeId },
+      });
+    }
+
+    if (
+      membership.role === ORGANIZATION_ROLES.MANAGER &&
+      granteeMembership.role === ORGANIZATION_ROLES.ADMIN
+    ) {
+      throw new AuthorizationError('MANAGER cannot grant permissions to an organization ADMIN.', {
+        details: { granteeUserId },
       });
     }
 
@@ -593,10 +671,11 @@ export class AuthorizationManagementService {
     const now = this.now();
     const correlationId = this.resolveCorrelationId(options.correlationId);
 
-    const [membership, scopes, existing] = await Promise.all([
+    const [membership, scopes, existing, actorExplicitDenies] = await Promise.all([
       this.deps.contextLookup.getOrganizationMembership(validatedOrgId, validatedActorId),
       this.deps.contextLookup.getActorScopeSummary(validatedOrgId, validatedActorId),
       this.deps.permissionGrants.findById(validatedOrgId, validatedGrantId),
+      this.deps.explicitDenyRules.listActiveByTargetUser(validatedOrgId, validatedActorId, now),
     ]);
 
     if (
@@ -613,13 +692,61 @@ export class AuthorizationManagementService {
       });
     }
 
-    if (membership.role === ORGANIZATION_ROLES.MANAGER) {
-      const canRevoke = isScopeManagedByManager(
+    const granteeMembership = await this.deps.contextLookup.getOrganizationMembership(
+      validatedOrgId,
+      existing.granteeUserId,
+    );
+
+    if (
+      isActorBlockedByExplicitDeny(
+        actorExplicitDenies,
+        membership.role,
+        existing.permission,
         existing.scopeType,
         existing.scopeId,
-        scopes.managedTeamIds,
-        scopes.managedProjectIds,
+        now,
+      )
+    ) {
+      throw new AuthorizationError(
+        'Actor is explicitly denied from revoking this permission grant.',
+        {
+          details: {
+            grantId: validatedGrantId,
+            permission: existing.permission,
+            scopeType: existing.scopeType,
+            scopeId: existing.scopeId,
+          },
+        },
       );
+    }
+
+    if (membership.role === ORGANIZATION_ROLES.MANAGER) {
+      if (
+        existing.grantedByRole === ORGANIZATION_ROLES.ADMIN ||
+        !MANAGER_DELEGABLE_PERMISSIONS.has(existing.permission) ||
+        granteeMembership?.role === ORGANIZATION_ROLES.ADMIN
+      ) {
+        throw new AuthorizationError(
+          'MANAGER cannot revoke permission grants issued by ADMIN, outside delegable permissions, or targeting an ADMIN.',
+          {
+            details: {
+              grantId: validatedGrantId,
+              permission: existing.permission,
+              grantedByRole: existing.grantedByRole,
+            },
+          },
+        );
+      }
+
+      const canRevoke =
+        existing.scopeType === PERMISSION_SCOPE_TYPES.RESOURCE
+          ? existing.grantedByUserId === validatedActorId
+          : isScopeManagedByManager(
+              existing.scopeType,
+              existing.scopeId,
+              scopes.managedTeamIds,
+              scopes.managedProjectIds,
+            );
       if (!canRevoke) {
         throw new AuthorizationError(
           'MANAGER can only revoke permission grants within their managed teams or projects.',

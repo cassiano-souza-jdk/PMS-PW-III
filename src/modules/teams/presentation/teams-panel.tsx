@@ -417,8 +417,22 @@ export function TeamsPanel({
                           id="edit-team-name"
                           type="text"
                           aria-invalid={editForm.formState.errors.name !== undefined}
+                          aria-describedby={
+                            editForm.formState.errors.name !== undefined
+                              ? 'edit-team-name-error'
+                              : undefined
+                          }
                           {...editForm.register('name')}
                         />
+                        {editForm.formState.errors.name !== undefined ? (
+                          <p
+                            id="edit-team-name-error"
+                            role="alert"
+                            className="text-xs font-medium text-destructive"
+                          >
+                            {intl.formatMessage({ id: 'validation.displayNameMin' })}
+                          </p>
+                        ) : null}
                       </div>
 
                       <div className="space-y-1.5">

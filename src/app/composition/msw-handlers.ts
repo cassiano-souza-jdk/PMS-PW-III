@@ -54,6 +54,7 @@ import {
   type SimulationScenarioController,
 } from '@/shared/http';
 import {
+  MEMBERSHIP_STATUSES,
   TRANSACTION_RESOURCES,
   asAuditEventId,
   asCorrelationId,
@@ -349,6 +350,17 @@ function resolveMswServices(deps: MswCompositionDependencies): AppServicesRegist
 
   const passwordVerifier = new WebCryptoSimulatedPasswordVerifier();
   const ephemeralSessionPointer = new InMemoryEphemeralSessionPointer();
+  const isActiveOrganizationMember = async (
+    organizationId: OrganizationId,
+    actorUserId: UserId,
+  ): Promise<boolean> => {
+    const member =
+      await deps.repositories.organizations.organizationMembers.findByOrganizationAndUser(
+        organizationId,
+        actorUserId,
+      );
+    return member !== null && member.status === MEMBERSHIP_STATUSES.ACTIVE;
+  };
 
   return Object.freeze({
     auth: new AuthService({
@@ -370,6 +382,7 @@ function resolveMswServices(deps: MswCompositionDependencies): AppServicesRegist
           },
           now,
         ),
+      isActiveOrganizationMember,
       ...(deps.now !== undefined ? { now: deps.now } : {}),
       ...(deps.generateUuid !== undefined ? { generateUuid: deps.generateUuid } : {}),
     }),
@@ -378,6 +391,7 @@ function resolveMswServices(deps: MswCompositionDependencies): AppServicesRegist
       auditEvents: deps.repositories.audit.auditEvents,
       transactionPort: deps.transactionPort,
       eventBus: deps.eventBus,
+      isActiveOrganizationMember,
       ...(deps.now !== undefined ? { now: deps.now } : {}),
       ...(deps.generateUuid !== undefined ? { generateUuid: deps.generateUuid } : {}),
     }),

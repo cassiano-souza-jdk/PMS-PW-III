@@ -58,25 +58,37 @@ export function createAuthorizationContextLookupAdapter(
     },
 
     async getActorScopeSummary(organizationId: OrganizationId, userId: UserId) {
-      const [orgTeams, userTeamMemberships, userProjectMemberships] = await Promise.all([
-        repositories.teams.teams.listByOrganization(organizationId, {
-          includeArchived: true,
-          includeDeleted: false,
-        }),
-        repositories.teams.teamMembers.listByUser(organizationId, userId),
-        repositories.projects.projectMembers.listByUser(organizationId, userId),
-      ]);
+      const [orgTeams, orgProjects, userTeamMemberships, userProjectMemberships] =
+        await Promise.all([
+          repositories.teams.teams.listByOrganization(organizationId, {
+            includeArchived: true,
+            includeDeleted: false,
+          }),
+          repositories.projects.projects.listByOrganization(organizationId, {
+            includeArchived: true,
+            includeDeleted: false,
+          }),
+          repositories.teams.teamMembers.listByUser(organizationId, userId),
+          repositories.projects.projectMembers.listByUser(organizationId, userId),
+        ]);
+
+      const activeTeamIdSet = new Set(
+        orgTeams.filter((team) => !isSoftDeleted(team)).map((team) => team.id),
+      );
+      const activeProjectIdSet = new Set(
+        orgProjects.filter((project) => !isSoftDeleted(project)).map((project) => project.id),
+      );
 
       const managedTeamIds: TeamId[] = orgTeams
         .filter((team) => !isSoftDeleted(team) && team.managerUserIds.includes(userId))
         .map((team) => team.id);
 
       const memberTeamIds: TeamId[] = userTeamMemberships
-        .filter((member) => member.removedAt === undefined)
+        .filter((member) => member.removedAt === undefined && activeTeamIdSet.has(member.teamId))
         .map((member) => member.teamId);
 
       const activeProjectMemberships = userProjectMemberships.filter(
-        (member) => member.removedAt === undefined,
+        (member) => member.removedAt === undefined && activeProjectIdSet.has(member.projectId),
       );
 
       const managedProjectIds: ProjectId[] = activeProjectMemberships
