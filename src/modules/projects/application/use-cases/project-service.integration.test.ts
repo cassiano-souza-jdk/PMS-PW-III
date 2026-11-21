@@ -6,7 +6,7 @@ import { InMemoryEphemeralSessionPointer } from '@/modules/authentication/infras
 import { PERMISSION_CODES, PERMISSION_SCOPE_TYPES } from '@/modules/authorization';
 import { BOARD_COLUMN_ROLES } from '@/modules/kanban';
 import { asOrganizationMemberId } from '@/modules/organizations';
-import { PROJECT_MEMBER_ROLES, PROJECT_STATUSES } from '@/modules/projects';
+import { PROJECT_MEMBER_ROLES, PROJECT_STATUSES, asProjectMemberId } from '@/modules/projects';
 import { asTaskParticipantId, type Task } from '@/modules/tasks';
 import { AuthorizationError, ConflictError, NotFoundError, ValidationError } from '@/shared/errors';
 import {
@@ -694,6 +694,463 @@ describe('ProjectService & TeamService.activeProjectCount Integration (Phase 06)
           asProjectId(crypto.randomUUID()),
         ),
       ).rejects.toThrowError(NotFoundError);
+    });
+  });
+
+  describe('Proteção do último MANAGER ativo, isolamento multi-organização, escopo cruzado, concessões expiradas e ExplicitDenyRule', () => {
+    it('protege último ProjectMember MANAGER ativo, impede auto-rebaixamento de MANAGER e isola revogação de grants por escopo PROJECT', async () => {
+      const { admin, manager, secondManager, member, organization } = await setupOrgWithRoles();
+
+      const team = await container.services.teams.createTeam(admin.user.id, organization.id, {
+        name: 'Squad Proteção',
+        managerUserIds: [manager.user.id, secondManager.user.id],
+      });
+
+      const projectA = await container.services.projects.createProject(
+        admin.user.id,
+        organization.id,
+        {
+          name: 'Projeto A Escopo',
+          teamId: team.id,
+          ownerUserId: manager.user.id,
+        },
+      );
+      const projectB = await container.services.projects.createProject(
+        admin.user.id,
+        organization.id,
+        {
+          name: 'Projeto B Escopo',
+          teamId: team.id,
+          ownerUserId: manager.user.id,
+        },
+      );
+
+      // Promove secondManager a MANAGER em projectA; MANAGER não altera papel de ADMIN nem auto-rebaixa; ADMIN consegue rebaixar quando há outro MANAGER
+      await container.services.projects.addProjectParticipant(
+        admin.user.id,
+        organization.id,
+        projectA.id,
+        secondManager.user.id,
+        PROJECT_MEMBER_ROLES.PARTICIPANT,
+      );
+      await container.services.projects.updateProjectParticipantRole(
+        admin.user.id,
+        organization.id,
+        projectA.id,
+        secondManager.user.id,
+        PROJECT_MEMBER_ROLES.MANAGER,
+      );
+
+      await container.services.projects.addProjectParticipant(
+        admin.user.id,
+        organization.id,
+        projectA.id,
+        admin.user.id,
+        PROJECT_MEMBER_ROLES.MANAGER,
+      );
+      await expect(
+        container.services.projects.updateProjectParticipantRole(
+          manager.user.id,
+          organization.id,
+          projectA.id,
+          admin.user.id,
+          PROJECT_MEMBER_ROLES.PARTICIPANT,
+        ),
+      ).rejects.toThrowError(AuthorizationError);
+
+      await expect(
+        container.services.projects.updateProjectParticipantRole(
+          secondManager.user.id,
+          organization.id,
+          projectA.id,
+          secondManager.user.id,
+          PROJECT_MEMBER_ROLES.PARTICIPANT,
+        ),
+      ).rejects.toThrowError(AuthorizationError);
+
+      const demotedSecond = await container.services.projects.updateProjectParticipantRole(
+        admin.user.id,
+        organization.id,
+        projectA.id,
+        secondManager.user.id,
+        PROJECT_MEMBER_ROLES.PARTICIPANT,
+      );
+      expect(demotedSecond.projectRole).toBe(PROJECT_MEMBER_ROLES.PARTICIPANT);
+
+      // Cenário em que ownerUserId não possui ProjectMember ativo e secondManager é o último ProjectMember MANAGER ativo
+      const guardedProject = await container.services.projects.createProject(
+        admin.user.id,
+        organization.id,
+        {
+          name: 'Projeto Último Gestor',
+          ownerUserId: admin.user.id,
+        },
+      );
+      const adminMember = await container.repositories.projects.projectMembers.findByProjectAndUser(
+        organization.id,
+        guardedProject.id,
+        admin.user.id,
+      );
+      expect(adminMember).not.toBeNull();
+      await container.repositories.projects.projectMembers.save({
+        ...adminMember!,
+        removedAt: currentNow,
+      });
+      await container.repositories.projects.projectMembers.save({
+        id: asProjectMemberId(crypto.randomUUID()),
+        organizationId: organization.id,
+        projectId: guardedProject.id,
+        userId: secondManager.user.id,
+        projectRole: PROJECT_MEMBER_ROLES.MANAGER,
+        joinedAt: currentNow,
+      });
+
+      await expect(
+        container.services.projects.updateProjectParticipantRole(
+          admin.user.id,
+          organization.id,
+          guardedProject.id,
+          secondManager.user.id,
+          PROJECT_MEMBER_ROLES.PARTICIPANT,
+        ),
+      ).rejects.toThrowError(ConflictError);
+
+      await expect(
+        container.services.projects.removeProjectParticipant(
+          admin.user.id,
+          organization.id,
+          guardedProject.id,
+          secondManager.user.id,
+        ),
+      ).rejects.toThrowError(ConflictError);
+
+      // Tarefa atribuída diretamente via assigneeId bloqueia remoção; tarefa CANCELLED libera e revoga SOMENTE grant do projeto alvo
+      await container.services.projects.addProjectParticipant(
+        admin.user.id,
+        organization.id,
+        projectA.id,
+        member.user.id,
+        PROJECT_MEMBER_ROLES.PARTICIPANT,
+      );
+      const orgGrant = await container.services.authorization.grantPermission(
+        admin.user.id,
+        organization.id,
+        {
+          granteeUserId: member.user.id,
+          permission: PERMISSION_CODES.TASK_COMMENT,
+          scopeType: PERMISSION_SCOPE_TYPES.ORGANIZATION,
+          reason: 'Grant organizacional preservado',
+        },
+      );
+      const projectAGrant = await container.services.authorization.grantPermission(
+        admin.user.id,
+        organization.id,
+        {
+          granteeUserId: member.user.id,
+          permission: PERMISSION_CODES.TASK_UPDATE,
+          scopeType: PERMISSION_SCOPE_TYPES.PROJECT,
+          scopeId: asEntityId(projectA.id),
+          reason: 'Grant específico projeto A',
+        },
+      );
+      const projectBGrant = await container.services.authorization.grantPermission(
+        admin.user.id,
+        organization.id,
+        {
+          granteeUserId: member.user.id,
+          permission: PERMISSION_CODES.TASK_CREATE,
+          scopeType: PERMISSION_SCOPE_TYPES.PROJECT,
+          scopeId: asEntityId(projectB.id),
+          reason: 'Grant específico projeto B',
+        },
+      );
+
+      const boardA = await container.repositories.kanban.projectBoards.findPrimaryByProject(
+        organization.id,
+        projectA.id,
+      );
+      const colsA = await container.repositories.kanban.boardColumns.listByBoard(
+        organization.id,
+        boardA!.id,
+      );
+      const assignedTask: Task = {
+        id: asTaskId(crypto.randomUUID()),
+        organizationId: organization.id,
+        projectId: projectA.id,
+        boardId: boardA!.id,
+        columnId: colsA[0]!.id,
+        title: 'Tarefa atribuída ao membro',
+        status: TASK_STATUSES.TODO,
+        priority: PRIORITIES.HIGH,
+        assigneeId: member.user.id,
+        order: 1,
+        tagIds: [],
+        lastMovedAt: currentNow,
+        lastActivityAt: currentNow,
+        createdByUserId: manager.user.id,
+        createdAt: currentNow,
+        updatedAt: currentNow,
+      };
+      await container.repositories.tasks.tasks.save(assignedTask);
+
+      await expect(
+        container.services.projects.removeProjectParticipant(
+          admin.user.id,
+          organization.id,
+          projectA.id,
+          member.user.id,
+        ),
+      ).rejects.toThrowError(ConflictError);
+
+      await container.repositories.tasks.tasks.save({
+        ...assignedTask,
+        status: TASK_STATUSES.CANCELLED,
+        cancelledAt: currentNow,
+        cancellationReason: 'Escopo cancelado',
+      });
+
+      await container.services.projects.removeProjectParticipant(
+        admin.user.id,
+        organization.id,
+        projectA.id,
+        member.user.id,
+      );
+
+      expect(
+        (
+          await container.repositories.authorization.permissionGrants.findById(
+            organization.id,
+            projectAGrant.id,
+          )
+        )?.revokedAt,
+      ).toBe(currentNow);
+      expect(
+        (
+          await container.repositories.authorization.permissionGrants.findById(
+            organization.id,
+            projectBGrant.id,
+          )
+        )?.revokedAt,
+      ).toBeUndefined();
+      expect(
+        (
+          await container.repositories.authorization.permissionGrants.findById(
+            organization.id,
+            orgGrant.id,
+          )
+        )?.revokedAt,
+      ).toBeUndefined();
+
+      // deleteProject decrementa TeamDetails.activeProjectCount e preserva grant organizacional
+      await container.services.projects.deleteProject(admin.user.id, organization.id, projectA.id);
+      await container.services.projects.deleteProject(admin.user.id, organization.id, projectB.id);
+
+      const teamDetailsAfterDeletes = await container.services.teams.getTeamDetails(
+        admin.user.id,
+        organization.id,
+        team.id,
+      );
+      expect(teamDetailsAfterDeletes.activeProjectCount).toBe(0);
+      expect(
+        (
+          await container.repositories.authorization.permissionGrants.findById(
+            organization.id,
+            projectBGrant.id,
+          )
+        )?.revokedAt,
+      ).toBe(currentNow);
+      expect(
+        (
+          await container.repositories.authorization.permissionGrants.findById(
+            organization.id,
+            orgGrant.id,
+          )
+        )?.revokedAt,
+      ).toBeUndefined();
+    });
+
+    it('bloqueia acesso cross-organization (ADMIN da Org B), escopo cruzado de MANAGER, concessão expirada, ExplicitDenyRule e projeto arquivado', async () => {
+      const { admin, manager, secondManager, member, outsider, organization } =
+        await setupOrgWithRoles();
+
+      const { organization: orgB } = await container.services.organizations.createOrganization(
+        outsider.user.id,
+        {
+          name: 'Org B Externa',
+          slug: 'org-b-externa',
+        },
+      );
+      const teamBOrg = await container.services.teams.createTeam(outsider.user.id, orgB.id, {
+        name: 'Equipe Org B',
+        managerUserIds: [outsider.user.id],
+      });
+
+      const teamX = await container.services.teams.createTeam(admin.user.id, organization.id, {
+        name: 'Squad X',
+        managerUserIds: [manager.user.id],
+      });
+      const teamY = await container.services.teams.createTeam(admin.user.id, organization.id, {
+        name: 'Squad Y',
+        managerUserIds: [secondManager.user.id],
+      });
+
+      const projectX = await container.services.projects.createProject(
+        admin.user.id,
+        organization.id,
+        {
+          name: 'Projeto X',
+          teamId: teamX.id,
+          ownerUserId: manager.user.id,
+        },
+      );
+      const projectY = await container.services.projects.createProject(
+        admin.user.id,
+        organization.id,
+        {
+          name: 'Projeto Y',
+          teamId: teamY.id,
+          ownerUserId: secondManager.user.id,
+        },
+      );
+
+      // Cenário 1: ADMIN da Organização B não lê nem altera projetos da Organização A
+      await expect(
+        container.services.projects.listProjects(outsider.user.id, organization.id),
+      ).rejects.toThrowError(AuthorizationError);
+      await expect(
+        container.services.projects.getProjectDetails(
+          outsider.user.id,
+          organization.id,
+          projectX.id,
+        ),
+      ).rejects.toThrowError(AuthorizationError);
+      await expect(
+        container.services.projects.updateProject(outsider.user.id, organization.id, projectX.id, {
+          name: 'Invasão Org B',
+        }),
+      ).rejects.toThrowError(AuthorizationError);
+      await expect(
+        container.services.projects.transferProjectTeam(
+          outsider.user.id,
+          organization.id,
+          projectX.id,
+          { targetTeamId: null },
+        ),
+      ).rejects.toThrowError(AuthorizationError);
+      await expect(
+        container.services.projects.deleteProject(outsider.user.id, organization.id, projectX.id),
+      ).rejects.toThrowError(AuthorizationError);
+      await expect(
+        container.services.projects.exportProjectData(
+          outsider.user.id,
+          organization.id,
+          projectX.id,
+        ),
+      ).rejects.toThrowError(AuthorizationError);
+
+      // Tentativa de vincular equipe de Org B em projeto de Org A -> NotFoundError
+      await expect(
+        container.services.projects.createProject(admin.user.id, organization.id, {
+          name: 'Vínculo Cross-Org',
+          teamId: teamBOrg.id,
+        }),
+      ).rejects.toThrowError(NotFoundError);
+
+      // Cenário 3: MANAGER atribuído a Projeto X não consulta nem administra Projeto Y
+      await expect(
+        container.services.projects.getProjectDetails(
+          manager.user.id,
+          organization.id,
+          projectY.id,
+        ),
+      ).rejects.toThrowError(AuthorizationError);
+      await expect(
+        container.services.projects.updateProject(manager.user.id, organization.id, projectY.id, {
+          name: 'Alteração Indevida',
+        }),
+      ).rejects.toThrowError(AuthorizationError);
+      await expect(
+        container.services.projects.archiveProject(manager.user.id, organization.id, projectY.id),
+      ).rejects.toThrowError(AuthorizationError);
+      await expect(
+        container.services.projects.addProjectParticipant(
+          manager.user.id,
+          organization.id,
+          projectY.id,
+          member.user.id,
+        ),
+      ).rejects.toThrowError(AuthorizationError);
+      await expect(
+        container.services.projects.exportProjectData(
+          manager.user.id,
+          organization.id,
+          projectY.id,
+        ),
+      ).rejects.toThrowError(AuthorizationError);
+
+      // Cenário 8: Concessão temporária expirada não autoriza criação de projeto após expiração
+      const expiresAt = asIsoDateTime('2026-06-11T10:00:00.000Z');
+      await container.services.authorization.grantPermission(admin.user.id, organization.id, {
+        granteeUserId: manager.user.id,
+        permission: PERMISSION_CODES.PROJECT_CREATE,
+        scopeType: PERMISSION_SCOPE_TYPES.ORGANIZATION,
+        reason: 'Janela temporária de criação',
+        expiresAt,
+      });
+
+      currentNow = asIsoDateTime('2026-06-12T10:00:00.000Z');
+      await expect(
+        container.services.projects.createProject(manager.user.id, organization.id, {
+          name: 'Após Expiração',
+          teamId: teamX.id,
+        }),
+      ).rejects.toThrowError(AuthorizationError);
+
+      // Cenário 10: ExplicitDenyRule prevalece sobre concessão ativa de PROJECT_VIEW
+      await container.services.authorization.grantPermission(admin.user.id, organization.id, {
+        granteeUserId: member.user.id,
+        permission: PERMISSION_CODES.PROJECT_VIEW,
+        scopeType: PERMISSION_SCOPE_TYPES.PROJECT,
+        scopeId: asEntityId(projectY.id),
+        reason: 'Leitura pontual do projeto Y',
+      });
+      await container.services.authorization.createExplicitDenyRule(
+        admin.user.id,
+        organization.id,
+        {
+          targetUserId: member.user.id,
+          permission: PERMISSION_CODES.PROJECT_VIEW,
+          scopeType: PERMISSION_SCOPE_TYPES.PROJECT,
+          scopeId: asEntityId(projectY.id),
+          reason: 'Restrição explícita sobre projeto Y',
+        },
+      );
+
+      await expect(
+        container.services.projects.getProjectDetails(member.user.id, organization.id, projectY.id),
+      ).rejects.toThrowError(AuthorizationError);
+      await expect(
+        container.services.projects.exportProjectData(member.user.id, organization.id, projectY.id),
+      ).rejects.toThrowError(AuthorizationError);
+
+      // Cenário 18: Operações operacionais bloqueadas em projeto arquivado mesmo para ADMIN
+      await container.services.projects.archiveProject(admin.user.id, organization.id, projectX.id);
+      await expect(
+        container.services.projects.transferProjectTeam(
+          admin.user.id,
+          organization.id,
+          projectX.id,
+          { targetTeamId: teamY.id },
+        ),
+      ).rejects.toThrowError(ConflictError);
+      await expect(
+        container.services.projects.addProjectParticipant(
+          admin.user.id,
+          organization.id,
+          projectX.id,
+          member.user.id,
+        ),
+      ).rejects.toThrowError(ConflictError);
     });
   });
 });

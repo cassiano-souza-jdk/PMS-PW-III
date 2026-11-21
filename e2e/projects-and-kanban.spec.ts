@@ -1,7 +1,7 @@
 import { expect, test } from '@playwright/test';
 
 test.describe('PMS Phase 06 — Projects, Participants & Kanban Board E2E', () => {
-  test('ADMIN creates project, opens Kanban board, creates column, creates quick cards, executes accessible move with WIP override, archives and restores project', async ({
+  test('ADMIN creates project, adds participant, opens Kanban board, creates column, creates quick cards, executes accessible move with WIP override, verifies archived board lock and restores project', async ({
     page,
   }) => {
     // 1. Entra como ADMIN da organização demonstrativa via /demo
@@ -29,6 +29,14 @@ test.describe('PMS Phase 06 — Projects, Participants & Kanban Board E2E', () =
     await page.getByRole('button', { name: 'Criar projeto' }).click();
 
     await expect(page.getByText('Projeto "Portal Clientes E2E" criado com sucesso.')).toBeVisible();
+
+    // Adiciona participante ativo da organização ao projeto criado
+    const addParticipantSelect = page.locator('#add-project-participant-select');
+    await expect(addParticipantSelect).toBeVisible();
+    await addParticipantSelect.selectOption('11111111-1111-4111-8111-111111111203');
+    await page.getByRole('button', { name: 'Adicionar ao projeto' }).click();
+    await expect(page.getByText('Participante adicionado ao projeto com sucesso.')).toBeVisible();
+    await expect(page.getByText('Participantes: 2').first()).toBeVisible();
 
     // Abre o quadro Kanban do projeto selecionado (Portal Clientes E2E)
     const projectDetailsCard = page.getByRole('button', { name: 'Abrir quadro Kanban' }).last();
@@ -113,7 +121,36 @@ test.describe('PMS Phase 06 — Projects, Participants & Kanban Board E2E', () =
       ),
     ).toBeVisible();
 
-    // Restaura o projeto para confirmar ciclo completo
+    // Abre a rota do quadro /projects/:id/board para comprovar banner kanban.archivedLockBanner e controles bloqueados em UI real
+    await page.getByRole('button', { name: 'Abrir quadro Kanban' }).last().click();
+    await expect(page).toHaveURL(/\/projects\/[0-9a-f-]+\/board$/);
+    await expect(
+      page.getByRole('heading', { level: 1, name: 'Quadro Kanban — Portal Clientes E2E' }),
+    ).toBeVisible();
+    await expect(
+      page.getByText(
+        'Este projeto está arquivado. Movimentações, criação de cartões e alterações estruturais estão bloqueadas.',
+      ),
+    ).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Criar coluna' })).toHaveCount(0);
+    await expect(page.getByRole('button', { name: 'Criar cartão' })).toHaveCount(0);
+    await expect(page.getByRole('button', { name: 'Excluir coluna' })).toHaveCount(0);
+    await expect(page.getByLabel('Mover para coluna')).toHaveCount(0);
+
+    // Volta para /projects e restaura o projeto para confirmar ciclo completo
+    await page.getByRole('button', { name: 'Voltar para projetos' }).click();
+    await expect(page).toHaveURL(/\/projects$/);
+    await page.getByLabel('Incluir projetos arquivados').check();
+    await page
+      .getByRole('button', { name: /Portal Clientes E2E/ })
+      .first()
+      .click();
+    await expect(
+      page.getByText(
+        'Este projeto está arquivado e permanece bloqueado para alterações operacionais.',
+      ),
+    ).toBeVisible();
+
     await page.getByRole('button', { name: 'Restaurar projeto' }).click();
     await expect(
       page.getByText('Projeto "Portal Clientes E2E" restaurado com sucesso.'),
