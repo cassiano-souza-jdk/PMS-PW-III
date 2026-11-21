@@ -1,7 +1,7 @@
 # Contrato de Endpoints Simulados (HTTP Client + MSW v2)
 
-- **Fase:** 03–04 — Dexie, IndexedDB, Repositórios, MSW, Autenticação, Usuários e Organizações
-- **Referências normativas:** `API-SIMULATION.md`, `DATA-PERSISTENCE.md`, `ARCHITECTURE.md`, `PERMISSIONS.md`, `SECURITY.md`, `ADR-0002`, `ADR-0003`, `ADR-0007`, `ADR-0008`, `docs/contracts/event-envelope.md`, `docs/contracts/permission-matrix.md`.
+- **Fase:** 03–05 — Dexie, IndexedDB, Repositórios, MSW, Autenticação, Usuários, Organizações, Convites, Equipes e Permissões
+- **Referências normativas:** `API-SIMULATION.md`, `DATA-PERSISTENCE.md`, `ARCHITECTURE.md`, `PERMISSIONS.md`, `SECURITY.md`, `ADR-0002`, `ADR-0003`, `ADR-0007`, `ADR-0008`, `ADR-0009`, `docs/contracts/event-envelope.md`, `docs/contracts/permission-matrix.md`.
 
 ## 1. Visão Geral e Princípios Invioláveis
 
@@ -189,3 +189,62 @@ Todos os endpoints abaixo delegam estritamente aos casos de uso em `container.se
 - **Cabeçalhos:** `x-actor-user-id`, `x-correlation-id`.
 - **Comportamento:** permite que o próprio ator saia da organização (`status: 'REMOVED'`), revoga grants ativos do usuário naquela organização, registra `AuditEvent`, bloqueia saída do último `ADMIN` ativo (`409 Conflict`) e **nunca** revoga a sessão global `UserSession`.
 - **Response (`200 OK`):** `ApiSuccessEnvelope<OrganizationMember>`.
+
+---
+
+## 8. Catálogo de Endpoints da Fase 05 (Convites, Equipes e Permissões RBAC + ABAC)
+
+Todos os endpoints abaixo delegam estritamente aos casos de uso em `container.services` (`InvitationService`, `TeamService`, `AuthorizationManagementService`), sem duplicar regras de negócio nos handlers MSW (`ADR-0009`).
+
+### 8.1 `GET /api/v1/organizations/:organizationId/invitations` e `POST /api/v1/organizations/:organizationId/invitations`
+- **Cabeçalhos:** `x-actor-user-id`, `x-correlation-id`.
+- **Autorização:** `PERMISSION_CODES.INVITATION_CREATE` (exclusivo `ADMIN`).
+- **`GET`:** lista convites da organização com `derivedStatus` (`PENDING` | `ACCEPTED` | `EXPIRED` | `REVOKED`) e `inviteLink`.
+- **`POST`:** cria convite nominal (`{ email, expiresInDays?: 1..90, initialRole?: 'MEMBER' | 'MANAGER' | 'ADMIN' }`), grava `AuditEvent` (`invitation.created`) em transação `[INVITATIONS, AUDIT_EVENTS]` e retorna `201 Created` (`CreateInvitationResult`).
+
+### 8.2 `POST /api/v1/organizations/:organizationId/invitations/:invitationId/revoke`
+- **Cabeçalhos:** `x-actor-user-id`, `x-correlation-id`.
+- **Autorização:** `PERMISSION_CODES.INVITATION_REVOKE` (exclusivo `ADMIN`).
+- **Comportamento:** revoga convite `PENDING` (`409 Conflict` para convites já aceitos, expirados ou revogados), gravando `AuditEvent` (`invitation.revoked`).
+
+### 8.3 `GET /api/v1/invitations/preview?code=...` e `POST /api/v1/invitations/accept`
+- **Cabeçalhos:** `x-actor-user-id`, `x-correlation-id`.
+- **`GET /preview`:** projeção mínima segura (`organizationName`, `organizationSlug`, `status`, `initialRole`, `expiresAt`, `emailMatchesActor`), sem expor membros da organização.
+- **`POST /accept`:** body `{ code }`; exige correspondência estrita `normalizeEmail(actor.email) === normalizeEmail(invitation.email)` (`403 Forbidden` se divergir — `ADR-0009` §2), bloqueia membro já `ACTIVE` (`409 Conflict`) e membro `SUSPENDED` (`403 Forbidden`); em transação `[INVITATIONS, ORGANIZATION_MEMBERS, AUDIT_EVENTS]` marca convite `ACCEPTED` e cria associação `OrganizationMember` `ACTIVE`.
+
+### 8.4 `GET /api/v1/organizations/:organizationId/teams` e `POST /api/v1/organizations/:organizationId/teams`
+- **Cabeçalhos:** `x-actor-user-id`, `x-correlation-id`.
+- **`GET`:** query param opcional `includeArchived=true`; filtra equipes visíveis conforme papel/escopo (`ADMIN`: todas não excluídas; `MANAGER`: equipes administradas; `MEMBER`: equipes das quais participa).
+- **`POST`:** exige `PERMISSION_CODES.TEAM_CREATE`; cria equipe, membros gestores iniciais e `AuditEvent` (`team.created`) em transação atômica (`201 Created`).
+
+### 8.5 `GET/PATCH/DELETE /api/v1/organizations/:organizationId/teams/:teamId`
+- **Cabeçalhos:** `x-actor-user-id`, `x-correlation-id`.
+- **`GET`:** exige `PERMISSION_CODES.TEAM_VIEW`; retorna equipe e membros ativos enriquecidos com `displayName`, `email` e `isManager`.
+- **`PATCH`:** exige `PERMISSION_CODES.TEAM_UPDATE`; atualiza `name`, `description` e/ou `managerUserIds` (bloqueado se arquivada/excluída com `409 Conflict`).
+- **`DELETE`:** exige `PERMISSION_CODES.TEAM_DELETE` (exclusivo `ADMIN`); bloqueia com `409 Conflict` se houver projeto não-excluído vinculado; executa soft-delete + `revokeAllByScope` de todos os grants da equipe + `AuditEvent` (`team.deleted`) atomicamente (`ADR-0009` §3.1).
+
+### 8.6 `POST /api/v1/organizations/:organizationId/teams/:teamId/archive` e `/restore`
+- **Cabeçalhos:** `x-actor-user-id`, `x-correlation-id`.
+- **Autorização:** `PERMISSION_CODES.TEAM_ARCHIVE`.
+- **Comportamento:** arquiva ou restaura a equipe sem excluir projetos vinculados; equipes arquivadas rejeitam novas associações de membros (`409 Conflict`).
+
+### 8.7 `POST /api/v1/organizations/:organizationId/teams/:teamId/members` e `DELETE .../members/:userId`
+- **Cabeçalhos:** `x-actor-user-id`, `x-correlation-id`.
+- **Autorização:** `PERMISSION_CODES.TEAM_MEMBERS_MANAGE`.
+- **`POST`:** associa membro `ACTIVE` da mesma organização à equipe (`201 Created`, bloqueando cross-org e equipes arquivadas/excluídas).
+- **`DELETE`:** marca `removedAt`, remove de `managerUserIds` se presente e revoga imediatamente todos os `PermissionGrant` do usuário no escopo da equipe via `revokeByScope` na mesma transação, sem alterar `OrganizationMember` nem autoria histórica (`ADR-0009` §3.2).
+
+### 8.8 `GET /api/v1/organizations/:organizationId/permissions/me`
+- **Cabeçalhos:** `x-actor-user-id`, `x-correlation-id`.
+- **Propósito:** retorna `{ grants, explicitDenies, managedTeamIds, memberTeamIds, managedProjectIds, participatedProjectIds }` ativos do próprio ator na organização para sincronização do `PermissionProvider` (`ADR-0009` §4.1).
+
+### 8.9 `GET/POST /api/v1/organizations/:organizationId/permissions/grants` e `POST .../grants/:grantId/revoke`
+- **Cabeçalhos:** `x-actor-user-id`, `x-correlation-id`.
+- **`GET`:** `ADMIN` lista todos os grants da organização com `derivedStatus`; `MANAGER` lista apenas grants de equipes/projetos sob sua administração; `MEMBER` recebe `403 Forbidden`.
+- **`POST`:** cria `PermissionGrant` validando `canGrantorDelegatePermission`, exigindo `reason` obrigatória, membro ativo e escopo existente na organização, com `AuditEvent` atômico (`201 Created`).
+- **`POST .../revoke`:** revoga grant imediatamente dentro da autoridade de escopo do revogador com `AuditEvent`.
+
+### 8.10 `GET/POST /api/v1/organizations/:organizationId/permissions/denies` e `POST .../denies/:denyRuleId/revoke`
+- **Cabeçalhos:** `x-actor-user-id`, `x-correlation-id`.
+- **`GET`:** `ADMIN` vê todas as regras de negação explícita da organização; `MANAGER` vê apenas regras em seus escopos administrados; `MEMBER` recebe `403 Forbidden`.
+- **`POST` e `POST .../revoke`:** exclusivos de `ADMIN` ativo; exigem `reason` obrigatória na criação; aplicam *Deny Overrides* imediato com `AuditEvent` atômico.

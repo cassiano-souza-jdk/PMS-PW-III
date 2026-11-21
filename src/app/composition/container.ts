@@ -8,7 +8,10 @@ import {
   BrowserEphemeralSessionPointer,
   InMemoryEphemeralSessionPointer,
 } from '@/modules/authentication/infrastructure/session/ephemeral-session-pointer';
+import { AuthorizationManagementService } from '@/modules/authorization';
+import { InvitationService } from '@/modules/invitations';
 import { OrganizationService } from '@/modules/organizations';
+import { TeamService } from '@/modules/teams';
 import { UserService } from '@/modules/users';
 import { env as defaultEnv, type AppEnv } from '@/shared/config';
 import {
@@ -34,6 +37,10 @@ import {
   type CreatePmsDatabaseOptions,
   type PmsDatabase,
 } from '@/shared/persistence';
+import {
+  createAuthorizationAuditWriterAdapter,
+  createAuthorizationContextLookupAdapter,
+} from './authorization-ports-adapter';
 import { ensureDemoOrganizationSeeded, type DemoOrganizationSeedResult } from './demo-seed';
 import { createRepositoriesRegistry, type AppRepositoriesRegistry } from './repositories-registry';
 
@@ -41,6 +48,9 @@ export interface AppServicesRegistry {
   readonly auth: AuthService;
   readonly users: UserService;
   readonly organizations: OrganizationService;
+  readonly invitations: InvitationService;
+  readonly teams: TeamService;
+  readonly authorization: AuthorizationManagementService;
 }
 
 export interface AppCompositionContainer {
@@ -169,6 +179,49 @@ export function createAppContainer(
         permissionGrants: resolvedRepositories.authorization.permissionGrants,
         explicitDenyRules: resolvedRepositories.authorization.explicitDenyRules,
         auditEvents: resolvedRepositories.audit.auditEvents,
+        transactionPort: resolvedTransactionPort,
+        eventBus: resolvedEventBus,
+        logger: resolvedLogger,
+        ...(options.now !== undefined ? { now: options.now } : {}),
+        ...(options.generateUuid !== undefined ? { generateUuid: options.generateUuid } : {}),
+      }),
+      invitations: new InvitationService({
+        invitations: resolvedRepositories.invitations.invitations,
+        organizations: resolvedRepositories.organizations.organizations,
+        organizationMembers: resolvedRepositories.organizations.organizationMembers,
+        users: resolvedRepositories.users.users,
+        permissionGrants: resolvedRepositories.authorization.permissionGrants,
+        explicitDenyRules: resolvedRepositories.authorization.explicitDenyRules,
+        auditEvents: resolvedRepositories.audit.auditEvents,
+        transactionPort: resolvedTransactionPort,
+        eventBus: resolvedEventBus,
+        logger: resolvedLogger,
+        ...(options.now !== undefined ? { now: options.now } : {}),
+        ...(options.generateUuid !== undefined ? { generateUuid: options.generateUuid } : {}),
+      }),
+      teams: new TeamService({
+        teams: resolvedRepositories.teams.teams,
+        teamMembers: resolvedRepositories.teams.teamMembers,
+        projects: resolvedRepositories.projects.projects,
+        organizationMembers: resolvedRepositories.organizations.organizationMembers,
+        users: resolvedRepositories.users.users,
+        permissionGrants: resolvedRepositories.authorization.permissionGrants,
+        explicitDenyRules: resolvedRepositories.authorization.explicitDenyRules,
+        auditEvents: resolvedRepositories.audit.auditEvents,
+        transactionPort: resolvedTransactionPort,
+        eventBus: resolvedEventBus,
+        logger: resolvedLogger,
+        ...(options.now !== undefined ? { now: options.now } : {}),
+        ...(options.generateUuid !== undefined ? { generateUuid: options.generateUuid } : {}),
+      }),
+      authorization: new AuthorizationManagementService({
+        permissionGrants: resolvedRepositories.authorization.permissionGrants,
+        explicitDenyRules: resolvedRepositories.authorization.explicitDenyRules,
+        contextLookup: createAuthorizationContextLookupAdapter(resolvedRepositories),
+        auditWriter: createAuthorizationAuditWriterAdapter(
+          resolvedRepositories,
+          options.generateUuid,
+        ),
         transactionPort: resolvedTransactionPort,
         eventBus: resolvedEventBus,
         logger: resolvedLogger,

@@ -51,3 +51,21 @@ export type {
   ExplicitDenyRuleRepositoryPort,
   PermissionGrantRepositoryPort,
 } from './application/ports/authorization-repository.port';
+
+export type {
+  AuthorizationAuditEntry,
+  AuthorizationAuditWriterPort,
+  AuthorizationContextLookupPort,
+  AuthorizationScopeSummary,
+} from './application/ports/authorization-context.port';
+
+export {
+  AuthorizationManagementService,
+  type AuthorizationManagementServiceDependencies,
+  type CreateExplicitDenyRuleInput,
+  type ExplicitDenyRuleWithActiveFlag,
+  type GrantPermissionInput,
+  type MyActiveAccessRules,
+  type PermissionGrantWithDerivedStatus,
+  type RevokeAuthorizationRuleOptions,
+} from './application/use-cases/authorization-management-service';
