@@ -10,6 +10,10 @@ const DemoPage = lazy(() => import('./pages/demo-page'));
 const ProfilePage = lazy(() => import('./pages/profile-page'));
 const OrganizationsPage = lazy(() => import('./pages/organizations-page'));
 const OrganizationSettingsPage = lazy(() => import('./pages/organization-settings-page'));
+const InvitationsPage = lazy(() => import('./pages/invitations-page'));
+const AcceptInvitationPage = lazy(() => import('./pages/accept-invitation-page'));
+const TeamsPage = lazy(() => import('./pages/teams-page'));
+const PermissionsPage = lazy(() => import('./pages/permissions-page'));
 
 export function LazyFoundationHomePage() {
   return (
@@ -79,6 +83,38 @@ export function LazyOrganizationSettingsPage() {
   return (
     <RouteSuspense>
       <OrganizationSettingsPage />
+    </RouteSuspense>
+  );
+}
+
+export function LazyInvitationsPage() {
+  return (
+    <RouteSuspense>
+      <InvitationsPage />
+    </RouteSuspense>
+  );
+}
+
+export function LazyAcceptInvitationPage() {
+  return (
+    <RouteSuspense>
+      <AcceptInvitationPage />
+    </RouteSuspense>
+  );
+}
+
+export function LazyTeamsPage() {
+  return (
+    <RouteSuspense>
+      <TeamsPage />
+    </RouteSuspense>
+  );
+}
+
+export function LazyPermissionsPage() {
+  return (
+    <RouteSuspense>
+      <PermissionsPage />
     </RouteSuspense>
   );
 }
