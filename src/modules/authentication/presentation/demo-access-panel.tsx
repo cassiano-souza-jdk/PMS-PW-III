@@ -146,7 +146,8 @@ export function DemoAccessPanel({
                     )}
                   </p>
                   <p className="font-mono text-[11px] text-foreground/80">
-                    {intl.formatMessage({ id: 'auth.common.passwordLabel' })}: {profile.password}
+                    {intl.formatMessage({ id: 'auth.demo.fictionalPasswordLabel' })}:{' '}
+                    {profile.password}
                   </p>
                 </div>
               </CardContent>

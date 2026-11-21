@@ -1,9 +1,12 @@
-import { useCallback, useMemo, type ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
+import { useComposition } from '@/app/composition';
 import {
   evaluateAuthorization,
   type AuthorizationActor,
   type AuthorizationDecision,
   type AuthorizationResource,
+  type AuthorizationScopeSummary,
+  type MyActiveAccessRules,
   type PermissionCode,
 } from '@/modules/authorization';
 import { asIsoDateTime } from '@/shared/kernel';
@@ -19,13 +22,136 @@ export interface PermissionProviderProps {
   readonly children: ReactNode;
 }
 
+const EMPTY_ACCESS_RULES: MyActiveAccessRules = Object.freeze({
+  grants: Object.freeze([]),
+  explicitDenies: Object.freeze([]),
+  managedTeamIds: Object.freeze([]),
+  memberTeamIds: Object.freeze([]),
+  managedProjectIds: Object.freeze([]),
+  participatedProjectIds: Object.freeze([]),
+});
+
+interface LoadedPermissionRulesState {
+  readonly contextKey: string | null;
+  readonly rules: MyActiveAccessRules;
+}
+
+const INITIAL_RULES_STATE: LoadedPermissionRulesState = {
+  contextKey: null,
+  rules: EMPTY_ACCESS_RULES,
+};
+
 /**
- * Fornece avaliação reativa de UX via motor puro `evaluateAuthorization` (`@/modules/authorization`).
+ * Sincroniza grants ativos, negações explícitas (Deny Overrides) e escopos administrados/participados
+ * via `services.authorization.listMyActiveAccessRules` (ADR-0009 §4) e avalia permissões de UX
+ * usando o motor puro `evaluateAuthorization` (`@/modules/authorization`).
+ *
  * A autorização definitiva permanece obrigatória nos casos de uso de aplicação.
  */
 export function PermissionProvider({ children }: PermissionProviderProps) {
+  const { services } = useComposition();
   const { isAuthenticated, user } = useAuth();
   const { activeOrganization } = useOrganization();
+
+  const [rulesState, setRulesState] = useState<LoadedPermissionRulesState>(INITIAL_RULES_STATE);
+  const [isRefreshing, setIsRefreshing] = useState<boolean>(false);
+
+  const authenticatedUserId = isAuthenticated && user !== null ? user.id : null;
+  const activeOrgId = activeOrganization?.id ?? null;
+  const contextKey =
+    authenticatedUserId !== null && activeOrgId !== null
+      ? `${authenticatedUserId}:${activeOrgId}`
+      : null;
+
+  useEffect(() => {
+    if (authenticatedUserId === null || activeOrgId === null || contextKey === null) {
+      return;
+    }
+
+    let isActive = true;
+    const targetUserId = authenticatedUserId;
+    const targetOrgId = activeOrgId;
+    const targetKey = contextKey;
+
+    async function syncActiveRules() {
+      try {
+        const rules = await services.authorization.listMyActiveAccessRules(
+          targetUserId,
+          targetOrgId,
+        );
+        if (!isActive) {
+          return;
+        }
+        setRulesState({
+          contextKey: targetKey,
+          rules,
+        });
+      } catch {
+        // Fallback gracioso em ambientes sem IndexedDB (ex.: testes unitários jsdom)
+        if (!isActive) {
+          return;
+        }
+        setRulesState({
+          contextKey: targetKey,
+          rules: EMPTY_ACCESS_RULES,
+        });
+      }
+    }
+
+    void syncActiveRules();
+
+    return () => {
+      isActive = false;
+    };
+  }, [activeOrgId, authenticatedUserId, contextKey, services.authorization]);
+
+  const refreshPermissions = useCallback(async (): Promise<void> => {
+    if (authenticatedUserId === null || activeOrgId === null || contextKey === null) {
+      setRulesState(INITIAL_RULES_STATE);
+      return;
+    }
+
+    const targetKey = contextKey;
+    setIsRefreshing(true);
+    try {
+      const rules = await services.authorization.listMyActiveAccessRules(
+        authenticatedUserId,
+        activeOrgId,
+      );
+      setRulesState({
+        contextKey: targetKey,
+        rules,
+      });
+    } catch {
+      setRulesState({
+        contextKey: targetKey,
+        rules: EMPTY_ACCESS_RULES,
+      });
+    } finally {
+      setIsRefreshing(false);
+    }
+  }, [activeOrgId, authenticatedUserId, contextKey, services.authorization]);
+
+  // Reset imediato ao trocar activeOrganizationId ou fazer logout (sem flash cross-org — ADR-0009 §4)
+  const effectiveRules = useMemo<MyActiveAccessRules>(() => {
+    if (contextKey === null || rulesState.contextKey !== contextKey) {
+      return EMPTY_ACCESS_RULES;
+    }
+    return rulesState.rules;
+  }, [contextKey, rulesState.contextKey, rulesState.rules]);
+
+  const isLoadingPermissions =
+    contextKey !== null && (isRefreshing || rulesState.contextKey !== contextKey);
+
+  const scopeSummary = useMemo<AuthorizationScopeSummary>(
+    () => ({
+      managedTeamIds: effectiveRules.managedTeamIds,
+      memberTeamIds: effectiveRules.memberTeamIds,
+      managedProjectIds: effectiveRules.managedProjectIds,
+      participatedProjectIds: effectiveRules.participatedProjectIds,
+    }),
+    [effectiveRules],
+  );
 
   const actor = useMemo<AuthorizationActor>(() => {
     if (!isAuthenticated || user === null) {
@@ -46,8 +172,14 @@ export function PermissionProvider({ children }: PermissionProviderProps) {
             },
           }
         : {}),
+      grants: effectiveRules.grants,
+      explicitDenies: effectiveRules.explicitDenies,
+      managedTeamIds: effectiveRules.managedTeamIds,
+      memberTeamIds: effectiveRules.memberTeamIds,
+      managedProjectIds: effectiveRules.managedProjectIds,
+      participatedProjectIds: effectiveRules.participatedProjectIds,
     };
-  }, [activeOrganization, isAuthenticated, user]);
+  }, [activeOrganization, effectiveRules, isAuthenticated, user]);
 
   const evaluate = useCallback(
     (
@@ -83,8 +215,21 @@ export function PermissionProvider({ children }: PermissionProviderProps) {
     () => ({
       can,
       evaluate,
+      refreshPermissions,
+      isLoadingPermissions,
+      activeGrants: effectiveRules.grants,
+      activeDenyRules: effectiveRules.explicitDenies,
+      scopeSummary,
     }),
-    [can, evaluate],
+    [
+      can,
+      effectiveRules.explicitDenies,
+      effectiveRules.grants,
+      evaluate,
+      isLoadingPermissions,
+      refreshPermissions,
+      scopeSummary,
+    ],
   );
 
   return <PermissionContext.Provider value={value}>{children}</PermissionContext.Provider>;
