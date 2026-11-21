@@ -25,6 +25,16 @@ export const INVITATION_STATUSES = {
 
 export type InvitationStatus = (typeof INVITATION_STATUSES)[keyof typeof INVITATION_STATUSES];
 
+export const INVITATION_ERROR_REASONS = {
+  EMAIL_MISMATCH: 'INVITATION_EMAIL_MISMATCH',
+  MEMBER_ALREADY_ACTIVE: 'MEMBER_ALREADY_ACTIVE',
+  MEMBER_SUSPENDED: 'MEMBER_SUSPENDED',
+  INVITATION_NOT_PENDING: 'INVITATION_NOT_PENDING',
+} as const;
+
+export type InvitationErrorReason =
+  (typeof INVITATION_ERROR_REASONS)[keyof typeof INVITATION_ERROR_REASONS];
+
 /** Default invitation validity window (15 days — PRD.md §7.2). */
 export const DEFAULT_INVITATION_EXPIRY_DAYS = 15;
 
@@ -77,6 +87,7 @@ export function assertInvitationCanBeAccepted(invitation: Invitation, now: IsoDa
       `Invitation cannot be accepted because its status is "${effectiveStatus}".`,
       {
         details: {
+          reason: INVITATION_ERROR_REASONS.INVITATION_NOT_PENDING,
           invitationId: invitation.id,
           status: effectiveStatus,
         },

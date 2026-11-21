@@ -1,11 +1,13 @@
 export {
   DEFAULT_INVITATION_EXPIRY_DAYS,
   DEFAULT_INVITATION_INITIAL_ROLE,
+  INVITATION_ERROR_REASONS,
   INVITATION_STATUSES,
   asInvitationId,
   assertInvitationCanBeAccepted,
   deriveInvitationStatus,
   type Invitation,
+  type InvitationErrorReason,
   type InvitationId,
   type InvitationStatus,
 } from './domain/invitation';

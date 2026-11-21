@@ -365,6 +365,33 @@ describe('TeamService Integration (Scope Visibility, Lifecycle, Member Removal &
         teamGrantForMember.id,
       );
       expect(grantAfter?.revokedAt).toBe(currentNow);
+
+      // Todos os TeamMember ativos da equipe recebem removedAt === currentNow
+      const managerTeamMemberAfter =
+        await container.repositories.teams.teamMembers.findByTeamAndUser(
+          organization.id,
+          team.id,
+          manager.user.id,
+        );
+      expect(managerTeamMemberAfter?.removedAt).toBe(currentNow);
+
+      const memberTeamMemberAfter =
+        await container.repositories.teams.teamMembers.findByTeamAndUser(
+          organization.id,
+          team.id,
+          member.user.id,
+        );
+      expect(memberTeamMemberAfter?.removedAt).toBe(currentNow);
+
+      // listMyActiveAccessRules do gestor e do membro não retornam mais a equipe removida
+      const [managerRulesAfter, memberRulesAfter] = await Promise.all([
+        container.services.authorization.listMyActiveAccessRules(manager.user.id, organization.id),
+        container.services.authorization.listMyActiveAccessRules(member.user.id, organization.id),
+      ]);
+      expect(managerRulesAfter.managedTeamIds).not.toContain(team.id);
+      expect(managerRulesAfter.memberTeamIds).not.toContain(team.id);
+      expect(memberRulesAfter.managedTeamIds).not.toContain(team.id);
+      expect(memberRulesAfter.memberTeamIds).not.toContain(team.id);
     });
   });
 });
