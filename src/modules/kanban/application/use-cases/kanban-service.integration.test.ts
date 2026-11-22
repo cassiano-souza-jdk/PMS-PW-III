@@ -1,6 +1,7 @@
 import { IDBFactory, IDBKeyRange } from 'fake-indexeddb';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { createAppContainer, type AppCompositionContainer } from '@/app/composition';
+import { AUDIT_CATEGORIES } from '@/modules/audit';
 import { InMemoryEphemeralSessionPointer } from '@/modules/authentication/infrastructure/session/ephemeral-session-pointer';
 import { PERMISSION_CODES, PERMISSION_SCOPE_TYPES } from '@/modules/authorization';
 import { IMPEDIMENT_CATEGORIES, IMPEDIMENT_STATUSES } from '@/modules/impediments';
@@ -17,6 +18,7 @@ import {
   ORGANIZATION_ROLES,
   PRIORITIES,
   TASK_STATUSES,
+  asBoardColumnId,
   asEntityId,
   asImpedimentId,
   asIsoDateTime,
@@ -484,6 +486,23 @@ describe('KanbanService Integration (Board, Columns, WIP, Lifecycle, Pauses, Dep
       );
       expect(movedWithWipOverride.columnId).toBe(reviewCol.id);
 
+      const wipAuditEvents = await container.repositories.audit.auditEvents.listByProject(
+        organization.id,
+        project.id,
+        { page: 1, pageSize: 50 },
+        { category: AUDIT_CATEGORIES.KANBAN },
+      );
+      const wipOverrideAudit = wipAuditEvents.items.find(
+        (event) =>
+          event.eventType === 'kanban.card.moved' &&
+          event.resourceId === card.id &&
+          event.after?.usedWipOverride === true,
+      );
+      expect(wipOverrideAudit).toBeDefined();
+      expect(wipOverrideAudit?.category).toBe(AUDIT_CATEGORIES.KANBAN);
+      expect(wipOverrideAudit?.after?.exceededWip).toBe(true);
+      expect(wipOverrideAudit?.justification).toBe('Prioridade crítica aprovada');
+
       // Pausa aberta impede movimentação sem exceção
       const cycles = await container.repositories.tasks.taskExecutionCycles.listByTask(
         organization.id,
@@ -711,6 +730,324 @@ describe('KanbanService Integration (Board, Columns, WIP, Lifecycle, Pauses, Dep
           cancelledTask.id,
           { targetColumnId: execCol.id },
         ),
+      ).rejects.toThrowError(ConflictError);
+    });
+  });
+
+  describe('Invariantes estruturais (assertValidBoardColumns), Deny Overrides, isolamento multi-org e bloqueio por arquivamento', () => {
+    it('respeita assertValidBoardColumns em archiveColumn/deleteColumn e exclui CANCELLED/soft-deleted de occupyingTaskCount', async () => {
+      const { manager, organization, project, boardView } = await setupProjectFixture();
+
+      const todoCol = boardView.columns[0]!;
+      const execCol = boardView.columns[1]!;
+      const reviewCol = boardView.columns[2]!;
+      const doneCol = boardView.columns[3]!;
+
+      // Não pode arquivar nem excluir a única coluna FINAL do quadro
+      await expect(
+        container.services.kanban.archiveColumn(
+          manager.user.id,
+          organization.id,
+          project.id,
+          doneCol.id,
+        ),
+      ).rejects.toThrowError(ConflictError);
+
+      await expect(
+        container.services.kanban.deleteColumn(
+          manager.user.id,
+          organization.id,
+          project.id,
+          doneCol.id,
+        ),
+      ).rejects.toThrowError(ConflictError);
+
+      // Arquiva colunas operacionais vazias até restar apenas todoCol (última operacional) -> bloqueado por assertValidBoardColumns
+      const archivedExec = await container.services.kanban.archiveColumn(
+        manager.user.id,
+        organization.id,
+        project.id,
+        execCol.id,
+      );
+      expect(archivedExec.archivedAt).toBe(currentNow);
+
+      await container.services.kanban.archiveColumn(
+        manager.user.id,
+        organization.id,
+        project.id,
+        reviewCol.id,
+      );
+
+      await expect(
+        container.services.kanban.archiveColumn(
+          manager.user.id,
+          organization.id,
+          project.id,
+          todoCol.id,
+        ),
+      ).rejects.toThrowError(ConflictError);
+
+      // Não pode migrar tarefas para uma coluna arquivada na exclusão
+      await container.services.kanban.createQuickCard(
+        manager.user.id,
+        organization.id,
+        project.id,
+        { title: 'Card em A Fazer', columnId: todoCol.id },
+      );
+      await expect(
+        container.services.kanban.deleteColumn(
+          manager.user.id,
+          organization.id,
+          project.id,
+          todoCol.id,
+          { migrationTargetColumnId: execCol.id },
+        ),
+      ).rejects.toThrowError(ConflictError);
+
+      // Restaura coluna arquivada e valida reorderColumns rejeitando ID inexistente
+      const restoredExec = await container.services.kanban.restoreColumn(
+        manager.user.id,
+        organization.id,
+        project.id,
+        execCol.id,
+      );
+      expect(restoredExec.archivedAt).toBeUndefined();
+
+      await expect(
+        container.services.kanban.reorderColumns(manager.user.id, organization.id, project.id, [
+          todoCol.id,
+          execCol.id,
+          doneCol.id,
+          asBoardColumnId(crypto.randomUUID()),
+        ]),
+      ).rejects.toThrowError(ValidationError);
+
+      // CANCELLED e soft-deleted NÃO incrementam occupyingTaskCount
+      const cancelledInExec: Task = {
+        id: asTaskId(crypto.randomUUID()),
+        organizationId: organization.id,
+        projectId: project.id,
+        boardId: boardView.board.id,
+        columnId: execCol.id,
+        title: 'Cancelada em Execução',
+        status: TASK_STATUSES.CANCELLED,
+        priority: PRIORITIES.LOW,
+        order: 1,
+        tagIds: [],
+        lastMovedAt: currentNow,
+        lastActivityAt: currentNow,
+        cancelledAt: currentNow,
+        createdByUserId: manager.user.id,
+        createdAt: currentNow,
+        updatedAt: currentNow,
+      };
+      const softDeletedInExec: Task = {
+        ...cancelledInExec,
+        id: asTaskId(crypto.randomUUID()),
+        title: 'Soft-Deleted em Execução',
+        status: TASK_STATUSES.IN_PROGRESS,
+        order: 2,
+        deletedAt: currentNow,
+        deletedBy: manager.user.id,
+      };
+      await container.repositories.tasks.tasks.saveMany(organization.id, [
+        cancelledInExec,
+        softDeletedInExec,
+      ]);
+
+      const updatedBoard = await container.services.kanban.getProjectBoard(
+        manager.user.id,
+        organization.id,
+        project.id,
+      );
+      expect(updatedBoard.columns.find((c) => c.id === execCol.id)?.occupyingTaskCount).toBe(0);
+    });
+
+    it('impõe precedência de ExplicitDenyRule sobre PermissionGrant em moveCard (Cenário 10), isola organizações (Cenário 1) e bloqueia ADMIN em projeto arquivado (Cenário 18)', async () => {
+      const { admin, manager, member, organization, project, boardView } =
+        await setupProjectFixture();
+
+      const todoCol = boardView.columns[0]!;
+      const execCol = boardView.columns[1]!;
+      const reviewCol = boardView.columns[2]!; // wipLimit: 2
+      const doneCol = boardView.columns[3]!;
+
+      // Preenche reviewCol até WIP = 2
+      await container.services.kanban.createQuickCard(
+        manager.user.id,
+        organization.id,
+        project.id,
+        { title: 'Revisão Ocupante 1', columnId: reviewCol.id },
+      );
+      await container.services.kanban.createQuickCard(
+        manager.user.id,
+        organization.id,
+        project.id,
+        { title: 'Revisão Ocupante 2', columnId: reviewCol.id },
+      );
+
+      // Card atribuído ao manager (MEMBER só move com grant explícito)
+      const card = await container.services.kanban.createQuickCard(
+        manager.user.id,
+        organization.id,
+        project.id,
+        {
+          title: 'Card Controlado por Grant vs Deny',
+          columnId: todoCol.id,
+          assigneeId: manager.user.id,
+        },
+      );
+
+      // Concede TASK_VIEW, BOARD_CARD_MOVE, TASK_MOVE e BOARD_WIP_MANAGE ao MEMBER no projeto
+      for (const permission of [
+        PERMISSION_CODES.TASK_VIEW,
+        PERMISSION_CODES.BOARD_CARD_MOVE,
+        PERMISSION_CODES.TASK_MOVE,
+        PERMISSION_CODES.BOARD_WIP_MANAGE,
+      ]) {
+        await container.services.authorization.grantPermission(admin.user.id, organization.id, {
+          granteeUserId: member.user.id,
+          permission,
+          scopeType: PERMISSION_SCOPE_TYPES.PROJECT,
+          scopeId: asEntityId(project.id),
+          reason: 'Delegação explícita temporária no projeto',
+        });
+      }
+
+      // Com os grants ativos, MEMBER consegue mover para Em Execução
+      const movedWithGrant = await container.services.kanban.moveCard(
+        member.user.id,
+        organization.id,
+        project.id,
+        card.id,
+        { targetColumnId: execCol.id },
+      );
+      expect(movedWithGrant.columnId).toBe(execCol.id);
+
+      // ExplicitDenyRule sobre BOARD_WIP_MANAGE bloqueia WIP override mesmo com grant ativo
+      const wipDenyRule = await container.services.authorization.createExplicitDenyRule(
+        admin.user.id,
+        organization.id,
+        {
+          targetUserId: member.user.id,
+          permission: PERMISSION_CODES.BOARD_WIP_MANAGE,
+          scopeType: PERMISSION_SCOPE_TYPES.PROJECT,
+          scopeId: asEntityId(project.id),
+          reason: 'Bloqueio explícito de exceção WIP',
+        },
+      );
+
+      await expect(
+        container.services.kanban.moveCard(member.user.id, organization.id, project.id, card.id, {
+          targetColumnId: reviewCol.id,
+          wipOverrideJustification: 'Tentativa apesar do deny WIP',
+        }),
+      ).rejects.toThrowError(AuthorizationError);
+
+      // Revoga deny de WIP, aplica ExplicitDenyRule em TASK_MOVE -> bloqueia até movimentação simples mesmo com grants ativos
+      await container.services.authorization.revokeExplicitDenyRule(
+        admin.user.id,
+        organization.id,
+        wipDenyRule.id,
+      );
+      await container.services.authorization.createExplicitDenyRule(
+        admin.user.id,
+        organization.id,
+        {
+          targetUserId: member.user.id,
+          permission: PERMISSION_CODES.TASK_MOVE,
+          scopeType: PERMISSION_SCOPE_TYPES.PROJECT,
+          scopeId: asEntityId(project.id),
+          reason: 'Deny Overrides prevalece sobre grant TASK_MOVE',
+        },
+      );
+
+      await expect(
+        container.services.kanban.moveCard(member.user.id, organization.id, project.id, card.id, {
+          targetColumnId: todoCol.id,
+        }),
+      ).rejects.toThrowError(AuthorizationError);
+
+      // Estado persistido no Dexie permanece inalterado
+      const persistedCard = await container.repositories.tasks.tasks.findById(
+        organization.id,
+        card.id,
+      );
+      expect(persistedCard?.columnId).toBe(execCol.id);
+
+      const memberBoardUnderDeny = await container.services.kanban.getProjectBoard(
+        member.user.id,
+        organization.id,
+        project.id,
+      );
+      expect(
+        memberBoardUnderDeny.cards.find((projection) => projection.task.id === card.id)?.canMove,
+      ).toBe(false);
+
+      // Cenário 1: ADMIN de outra organização não lê nem altera o quadro da organização A
+      const outsider = await registerUser('outsider.kanban@pms.local', 'Admin Org B');
+      await container.services.organizations.createOrganization(outsider.user.id, {
+        name: 'Org B Kanban',
+        slug: 'org-b-kanban',
+      });
+
+      await expect(
+        container.services.kanban.getProjectBoard(outsider.user.id, organization.id, project.id),
+      ).rejects.toThrowError(AuthorizationError);
+      await expect(
+        container.services.kanban.createColumn(outsider.user.id, organization.id, project.id, {
+          name: 'Invasão',
+          columnRole: BOARD_COLUMN_ROLES.OPERATIONAL,
+          wipLimit: null,
+        }),
+      ).rejects.toThrowError(AuthorizationError);
+      await expect(
+        container.services.kanban.createQuickCard(outsider.user.id, organization.id, project.id, {
+          title: 'Card Invasor',
+        }),
+      ).rejects.toThrowError(AuthorizationError);
+      await expect(
+        container.services.kanban.moveCard(outsider.user.id, organization.id, project.id, card.id, {
+          targetColumnId: todoCol.id,
+        }),
+      ).rejects.toThrowError(AuthorizationError);
+
+      // Cenário 18: Projeto arquivado bloqueia mutações estruturais e operacionais mesmo para ADMIN
+      await container.services.projects.archiveProject(admin.user.id, organization.id, project.id);
+
+      await expect(
+        container.services.kanban.createColumn(admin.user.id, organization.id, project.id, {
+          name: 'Nova em Arquivado',
+          columnRole: BOARD_COLUMN_ROLES.OPERATIONAL,
+          wipLimit: null,
+        }),
+      ).rejects.toThrowError(ConflictError);
+      await expect(
+        container.services.kanban.updateColumn(
+          admin.user.id,
+          organization.id,
+          project.id,
+          reviewCol.id,
+          { wipLimit: 5 },
+        ),
+      ).rejects.toThrowError(ConflictError);
+      await expect(
+        container.services.kanban.reorderColumns(admin.user.id, organization.id, project.id, [
+          todoCol.id,
+          execCol.id,
+          reviewCol.id,
+          doneCol.id,
+        ]),
+      ).rejects.toThrowError(ConflictError);
+      await expect(
+        container.services.kanban.createQuickCard(admin.user.id, organization.id, project.id, {
+          title: 'Bloqueado Arquivado',
+        }),
+      ).rejects.toThrowError(ConflictError);
+      await expect(
+        container.services.kanban.moveCard(admin.user.id, organization.id, project.id, card.id, {
+          targetColumnId: todoCol.id,
+        }),
       ).rejects.toThrowError(ConflictError);
     });
   });

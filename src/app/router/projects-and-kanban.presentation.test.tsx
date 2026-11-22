@@ -226,6 +226,13 @@ describe('Projects, Participants & Kanban Presentation + Routing + Accessibility
           .closest('section')!;
         await within(homologacaoSection).findByText('WIP: 1/1');
 
+        const liveRegion = screen.getByRole('status', {
+          name: ptBRMessages['kanban.liveRegionLabel'],
+        });
+        expect(liveRegion).toHaveTextContent(
+          'Cartão "Cartão Rápido Teste" movido para a coluna "Homologação".',
+        );
+
         // Move 2º cartão para Homologação via select acessível -> abre diálogo WIP Override
         const existingCardArticle = screen
           .getByRole('heading', {
@@ -254,6 +261,74 @@ describe('Projects, Participants & Kanban Presentation + Routing + Accessibility
         );
 
         await screen.findByText(ptBRMessages['kanban.wipExceededBadge']);
+        expect(liveRegion).toHaveTextContent(
+          'Cartão "Validar persistencia local Dexie e isolamento multi-organizacao" movido para a coluna "Homologação".',
+        );
+        expect(await axe(container)).toHaveNoViolations();
+
+        // 8. Reordena coluna via botão acessível e verifica anúncio na região viva
+        const homologacaoBeforeReorder = screen
+          .getByRole('heading', { level: 2, name: 'Homologação' })
+          .closest('section')!;
+        await user.click(
+          within(homologacaoBeforeReorder).getByRole('button', {
+            name: ptBRMessages['kanban.column.moveLeftAction'],
+          }),
+        );
+        await waitFor(() => {
+          expect(liveRegion).toHaveTextContent('Coluna "Homologação" movida para a posição 4.');
+        });
+        expect(
+          screen
+            .getAllByRole('heading', { level: 2 })
+            .slice(0, 5)
+            .map((heading) => heading.textContent),
+        ).toEqual(['A Fazer', 'Em Execucao', 'Em Revisao', 'Homologação', 'Concluido']);
+
+        // 9. Exclusão inline de coluna com migração obrigatória de cartões
+        const homologacaoForDelete = screen
+          .getByRole('heading', { level: 2, name: 'Homologação' })
+          .closest('section')!;
+        await user.click(
+          within(homologacaoForDelete).getByRole('button', {
+            name: ptBRMessages['kanban.column.deleteAction'],
+          }),
+        );
+        const migrationSelect = within(homologacaoForDelete).getByLabelText(
+          ptBRMessages['kanban.column.deleteTargetLabel'],
+          { exact: false },
+        );
+        const todoOption = Array.from((migrationSelect as HTMLSelectElement).options).find(
+          (opt) => opt.textContent === 'A Fazer',
+        );
+        expect(todoOption).toBeDefined();
+        await user.selectOptions(migrationSelect, todoOption!.value);
+        expect(await axe(container)).toHaveNoViolations();
+
+        await user.click(
+          within(homologacaoForDelete).getByRole('button', {
+            name: ptBRMessages['kanban.column.deleteConfirmAction'],
+          }),
+        );
+        expect(
+          await screen.findByText('Coluna "Homologação" excluída com sucesso.'),
+        ).toBeInTheDocument();
+        expect(
+          screen.queryByRole('heading', { level: 2, name: 'Homologação' }),
+        ).not.toBeInTheDocument();
+
+        const todoSection = screen
+          .getByRole('heading', { level: 2, name: 'A Fazer' })
+          .closest('section')!;
+        expect(
+          within(todoSection).getByRole('heading', { level: 3, name: 'Cartão Rápido Teste' }),
+        ).toBeInTheDocument();
+        expect(
+          within(todoSection).getByRole('heading', {
+            level: 3,
+            name: 'Validar persistencia local Dexie e isolamento multi-organizacao',
+          }),
+        ).toBeInTheDocument();
         expect(await axe(container)).toHaveNoViolations();
 
         const domNestingWarnings = consoleErrorSpy.mock.calls.filter((args) =>
@@ -332,6 +407,45 @@ describe('Projects, Participants & Kanban Presentation + Routing + Accessibility
         name: 'Quadro Kanban — Lancamento Plataforma PMS v1',
       });
 
+      // Visão restrita de MEMBER: sem gestão de colunas/WIP, sem criação de cartão rápido e sem ver cartões alheios
+      expect(
+        screen.queryByRole('button', { name: ptBRMessages['kanban.column.createAction'] }),
+      ).not.toBeInTheDocument();
+      expect(
+        screen.queryByRole('button', { name: ptBRMessages['kanban.column.editAction'] }),
+      ).not.toBeInTheDocument();
+      expect(
+        screen.queryByRole('button', { name: ptBRMessages['kanban.column.archiveAction'] }),
+      ).not.toBeInTheDocument();
+      expect(
+        screen.queryByRole('button', { name: ptBRMessages['kanban.column.deleteAction'] }),
+      ).not.toBeInTheDocument();
+      expect(
+        screen.queryByRole('button', { name: ptBRMessages['kanban.column.moveLeftAction'] }),
+      ).not.toBeInTheDocument();
+      expect(
+        screen.queryByRole('button', { name: ptBRMessages['kanban.column.moveRightAction'] }),
+      ).not.toBeInTheDocument();
+      expect(
+        screen.queryByRole('button', { name: ptBRMessages['kanban.quickCard.submit'] }),
+      ).not.toBeInTheDocument();
+      expect(
+        screen.queryByRole('heading', {
+          level: 3,
+          name: 'Revisar limites de WIP e fluxo operacional do quadro Kanban',
+        }),
+      ).not.toBeInTheDocument();
+      expect(
+        screen.queryByRole('heading', {
+          level: 3,
+          name: 'Cartao ocupando WIP de Revisao',
+        }),
+      ).not.toBeInTheDocument();
+      const reviewSection = screen
+        .getByRole('heading', { level: 2, name: 'Em Revisao' })
+        .closest('section')!;
+      expect(within(reviewSection).getByText('WIP: 1/1')).toBeInTheDocument();
+
       // Tenta mover FOUNDATION_TASK de "Em Execucao" para "Em Revisao" (WIP 1/1) sem permissão de override
       const cardArticle = screen
         .getByRole('heading', {
@@ -347,6 +461,9 @@ describe('Projects, Participants & Kanban Presentation + Routing + Accessibility
 
       const wipAlert = await screen.findByRole('alert');
       expect(wipAlert).toHaveTextContent(ptBRMessages['kanban.wipOverride.noPermissionError']);
+      expect(
+        screen.getByRole('status', { name: ptBRMessages['kanban.liveRegionLabel'] }),
+      ).toHaveTextContent(ptBRMessages['kanban.wipOverride.noPermissionError']);
       expect(await axe(container)).toHaveNoViolations();
       unmount();
 
@@ -358,7 +475,7 @@ describe('Projects, Participants & Kanban Presentation + Routing + Accessibility
       expect(await axe(invalidRouteView.container)).toHaveNoViolations();
       invalidRouteView.unmount();
 
-      // Arquiva o projeto via serviço e confirma banner de bloqueio na tela do quadro
+      // Arquiva o projeto via serviço e confirma banner de bloqueio na tela do quadro (MEMBER e ADMIN)
       await appContainer.services.projects.archiveProject(
         DEMO_ADMIN_USER_ID,
         DEMO_ORG_ID,
@@ -379,7 +496,57 @@ describe('Projects, Participants & Kanban Presentation + Routing + Accessibility
           name: ptBRMessages['kanban.card.moveRightAction'],
         }),
       ).not.toBeInTheDocument();
+      expect(
+        within(archivedBoardView.container).queryByLabelText(
+          ptBRMessages['kanban.card.moveToColumnLabel'],
+        ),
+      ).not.toBeInTheDocument();
       expect(await axe(archivedBoardView.container)).toHaveNoViolations();
+      archivedBoardView.unmount();
+
+      // Autentica como ADMIN no mesmo container arquivado e confirma bloqueio operacional também para ADMIN
+      const archivedAdminDemoView = await renderIsolatedApp('/demo', appContainer);
+      await within(archivedAdminDemoView.container).findByRole('heading', {
+        level: 1,
+        name: ptBRMessages['auth.demo.title'],
+      });
+      await user.click(
+        within(archivedAdminDemoView.container).getByRole('button', {
+          name: 'Entrar como Administrador',
+        }),
+      );
+      await within(archivedAdminDemoView.container).findByRole('heading', {
+        level: 1,
+        name: ptBRMessages['organizations.title'],
+      });
+      await archivedAdminDemoView.router.navigate(`/projects/${DEMO_PROJECT_ID}/board`);
+      expect(
+        await within(archivedAdminDemoView.container).findByText(
+          ptBRMessages['kanban.archivedLockBanner'],
+        ),
+      ).toBeInTheDocument();
+      expect(
+        within(archivedAdminDemoView.container).queryByRole('button', {
+          name: ptBRMessages['kanban.column.createAction'],
+        }),
+      ).not.toBeInTheDocument();
+      expect(
+        within(archivedAdminDemoView.container).queryByRole('button', {
+          name: ptBRMessages['kanban.quickCard.submit'],
+        }),
+      ).not.toBeInTheDocument();
+      expect(
+        within(archivedAdminDemoView.container).queryByRole('button', {
+          name: ptBRMessages['kanban.column.deleteAction'],
+        }),
+      ).not.toBeInTheDocument();
+      expect(
+        within(archivedAdminDemoView.container).queryByRole('button', {
+          name: ptBRMessages['kanban.card.moveRightAction'],
+        }),
+      ).not.toBeInTheDocument();
+      expect(await axe(archivedAdminDemoView.container)).toHaveNoViolations();
+      archivedAdminDemoView.unmount();
 
       // Garante que DEMO_MEMBER_USER_ID existe no escopo usado
       expect(DEMO_MEMBER_USER_ID).toBeDefined();
