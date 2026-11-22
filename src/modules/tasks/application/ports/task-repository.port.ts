@@ -23,6 +23,10 @@ import type {
 
 export interface TaskRepositoryPort {
   findById(organizationId: OrganizationId, taskId: TaskId): Promise<Task | null>;
+  listByOrganization(
+    organizationId: OrganizationId,
+    options?: { readonly includeDeleted?: boolean },
+  ): Promise<readonly Task[]>;
   listByProject(
     organizationId: OrganizationId,
     projectId: ProjectId,
@@ -39,6 +43,11 @@ export interface TaskRepositoryPort {
 }
 
 export interface TaskParticipantRepositoryPort {
+  findByTaskAndUser(
+    organizationId: OrganizationId,
+    taskId: TaskId,
+    userId: UserId,
+  ): Promise<TaskParticipant | null>;
   listByTask(organizationId: OrganizationId, taskId: TaskId): Promise<readonly TaskParticipant[]>;
   listByUser(organizationId: OrganizationId, userId: UserId): Promise<readonly TaskParticipant[]>;
   save(participant: TaskParticipant): Promise<void>;
@@ -48,6 +57,7 @@ export interface SubtaskRepositoryPort {
   findById(organizationId: OrganizationId, subtaskId: SubtaskId): Promise<Subtask | null>;
   listByTask(organizationId: OrganizationId, taskId: TaskId): Promise<readonly Subtask[]>;
   save(subtask: Subtask): Promise<void>;
+  saveMany(organizationId: OrganizationId, subtasks: readonly Subtask[]): Promise<void>;
   delete(organizationId: OrganizationId, subtaskId: SubtaskId): Promise<void>;
 }
 
@@ -90,6 +100,7 @@ export interface TaskAttachmentRepositoryPort {
 
 export interface TagRepositoryPort {
   findById(organizationId: OrganizationId, tagId: TagId): Promise<Tag | null>;
+  findByNormalizedName(organizationId: OrganizationId, name: string): Promise<Tag | null>;
   listByOrganization(organizationId: OrganizationId): Promise<readonly Tag[]>;
   save(tag: Tag): Promise<void>;
   delete(organizationId: OrganizationId, tagId: TagId): Promise<void>;

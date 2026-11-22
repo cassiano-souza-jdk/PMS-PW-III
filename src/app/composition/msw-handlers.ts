@@ -18,6 +18,17 @@ import {
 } from '@/modules/authorization';
 import { DEMO_SEED_VERSION } from '@/modules/demo';
 import {
+  DependencyService,
+  asTaskDependencyId,
+  type AddTaskDependencyInput,
+} from '@/modules/dependencies';
+import {
+  ImpedimentService,
+  type CreateImpedimentInput,
+  type TransitionImpedimentInput,
+  type UpdateImpedimentInput,
+} from '@/modules/impediments';
+import {
   InvitationService,
   asInvitationId,
   type CreateInvitationInput,
@@ -41,6 +52,24 @@ import {
   type TransferProjectTeamInput,
   type UpdateProjectInput,
 } from '@/modules/projects';
+import {
+  TaskService,
+  asTagId,
+  asTaskCommentId,
+  type AssignSubtaskInput,
+  type AssignTaskInput,
+  type CancelTaskInput,
+  type CompleteTaskInput,
+  type CreateSubtaskInput,
+  type CreateTagInput,
+  type CreateTaskInput,
+  type PauseTaskInput,
+  type ReopenTaskInput,
+  type TaskCommentInput,
+  type UpdateSubtaskInput,
+  type UpdateTagInput,
+  type UpdateTaskInput,
+} from '@/modules/tasks';
 import { TeamService, type CreateTeamInput, type UpdateTeamInput } from '@/modules/teams';
 import { UserService, type UpdateMyProfileInput } from '@/modules/users';
 import {
@@ -58,23 +87,32 @@ import {
   type SimulationScenarioController,
 } from '@/shared/http';
 import {
+  MAX_ATTACHMENT_SIZE_BYTES,
   MEMBERSHIP_STATUSES,
+  asAttachmentId,
   asBoardColumnId,
   asCorrelationId,
   asGrantId,
+  asImpedimentId,
   asIsoDateTime,
   asOrganizationId,
   asProjectId,
+  asSubtaskId,
   asTaskId,
   asTeamId,
   asUserId,
+  assertSameOrganization,
   isSoftDeleted,
   isUuid,
+  type AttachmentBlobPayload,
+  type AttachmentBlobStorePort,
+  type AttachmentId,
   type BoardColumnId,
   type DomainEventPublisherPort,
   type IsoDateTime,
   type OrganizationId,
   type OrganizationRole,
+  type SubtaskId,
   type TransactionPort,
   type UserId,
 } from '@/shared/kernel';
@@ -94,12 +132,18 @@ import {
   createProjectTeamLookupAdapter,
 } from './project-ports-adapter';
 import type { AppRepositoriesRegistry } from './repositories-registry';
+import {
+  createDependencyWorkContextAdapter,
+  createImpedimentWorkContextAdapter,
+  createTaskProjectContextAdapter,
+} from './task-ports-adapter';
 
 export interface MswCompositionDependencies {
   readonly repositories: AppRepositoriesRegistry;
   readonly transactionPort: TransactionPort;
   readonly eventBus: DomainEventPublisherPort;
   readonly simulationController: SimulationScenarioController;
+  readonly attachmentBlobStore?: AttachmentBlobStorePort;
   readonly services?: AppServicesRegistry;
   readonly now?: () => IsoDateTime;
   readonly generateUuid?: () => string;
@@ -259,10 +303,97 @@ function withSimulatedEndpoint(
   };
 }
 
+function createInMemoryAttachmentBlobStore(): AttachmentBlobStorePort {
+  const blobs = new Map<AttachmentId, AttachmentBlobPayload>();
+
+  return {
+    async putBlob(payload): Promise<void> {
+      const normalizedMimeType = payload.mimeType.trim().toLowerCase();
+      if (normalizedMimeType.length === 0) {
+        throw new ValidationError('Attachment blob "mimeType" must be a non-empty string.');
+      }
+      if (payload.bytes.byteLength <= 0 || payload.bytes.byteLength > MAX_ATTACHMENT_SIZE_BYTES) {
+        throw new ValidationError('Attachment blob size is outside allowed bounds.');
+      }
+      const existing = blobs.get(payload.attachmentId);
+      if (existing !== undefined) {
+        assertSameOrganization(existing.organizationId, payload.organizationId, 'AttachmentBlob');
+      }
+      blobs.set(payload.attachmentId, {
+        attachmentId: payload.attachmentId,
+        organizationId: payload.organizationId,
+        mimeType: normalizedMimeType,
+        bytes: new Uint8Array(payload.bytes),
+      });
+    },
+
+    async getBlob(organizationId, attachmentId): Promise<AttachmentBlobPayload | null> {
+      const existing = blobs.get(attachmentId);
+      if (!existing) {
+        return null;
+      }
+      assertSameOrganization(organizationId, existing.organizationId, 'AttachmentBlob');
+      return {
+        ...existing,
+        bytes: new Uint8Array(existing.bytes),
+      };
+    },
+
+    async deleteBlob(organizationId, attachmentId): Promise<void> {
+      const existing = blobs.get(attachmentId);
+      if (!existing) {
+        return;
+      }
+      assertSameOrganization(organizationId, existing.organizationId, 'AttachmentBlob');
+      blobs.delete(attachmentId);
+    },
+  };
+}
+
+/**
+ * Transport-layer Base64 decoding restricted strictly to MSW HTTP boundary (ADR-0011 §2.5).
+ */
+function decodeBase64ToUint8Array(base64: string): Uint8Array {
+  const normalized = base64.trim();
+  if (normalized.length === 0) {
+    throw new ValidationError('Field "contentBase64" must be a non-empty base64 string.', {
+      details: { field: 'contentBase64' },
+    });
+  }
+
+  try {
+    const binary = globalThis.atob(normalized);
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i += 1) {
+      bytes[i] = binary.charCodeAt(i);
+    }
+    return bytes;
+  } catch {
+    throw new ValidationError('Field "contentBase64" is not valid base64.', {
+      details: { field: 'contentBase64' },
+    });
+  }
+}
+
+/**
+ * Transport-layer Base64 encoding restricted strictly to MSW HTTP boundary (ADR-0011 §2.5).
+ */
+function encodeUint8ArrayToBase64(bytes: Uint8Array): string {
+  const chunkSize = 0x8000;
+  let binary = '';
+  for (let offset = 0; offset < bytes.length; offset += chunkSize) {
+    const chunk = bytes.subarray(offset, offset + chunkSize);
+    binary += String.fromCharCode(...chunk);
+  }
+  return globalThis.btoa(binary);
+}
+
 function resolveMswServices(deps: MswCompositionDependencies): AppServicesRegistry {
   if (deps.services !== undefined) {
     return deps.services;
   }
+
+  const attachmentBlobStore = deps.attachmentBlobStore ?? createInMemoryAttachmentBlobStore();
 
   const passwordVerifier = new WebCryptoSimulatedPasswordVerifier();
   const ephemeralSessionPointer = new InMemoryEphemeralSessionPointer();
@@ -380,6 +511,56 @@ function resolveMswServices(deps: MswCompositionDependencies): AppServicesRegist
       impediments: deps.repositories.impediments.impediments,
       taskPauses: deps.repositories.tasks.taskPauses,
       taskExecutionCycles: deps.repositories.tasks.taskExecutionCycles,
+      organizationMembers: deps.repositories.organizations.organizationMembers,
+      organizationSettings: deps.repositories.settings.organizationSettings,
+      permissionGrants: deps.repositories.authorization.permissionGrants,
+      explicitDenyRules: deps.repositories.authorization.explicitDenyRules,
+      auditEvents: deps.repositories.audit.auditEvents,
+      transactionPort: deps.transactionPort,
+      eventBus: deps.eventBus,
+      ...(deps.now !== undefined ? { now: deps.now } : {}),
+      ...(deps.generateUuid !== undefined ? { generateUuid: deps.generateUuid } : {}),
+    }),
+    tasks: new TaskService({
+      tasks: deps.repositories.tasks.tasks,
+      taskParticipants: deps.repositories.tasks.taskParticipants,
+      subtasks: deps.repositories.tasks.subtasks,
+      taskPauses: deps.repositories.tasks.taskPauses,
+      taskExecutionCycles: deps.repositories.tasks.taskExecutionCycles,
+      taskComments: deps.repositories.tasks.taskComments,
+      taskAttachments: deps.repositories.tasks.taskAttachments,
+      tags: deps.repositories.tasks.tags,
+      taskDeadlineHistory: deps.repositories.tasks.taskDeadlineHistory,
+      taskDependencies: deps.repositories.dependencies.taskDependencies,
+      impediments: deps.repositories.impediments.impediments,
+      attachmentBlobStore,
+      projectContext: createTaskProjectContextAdapter(deps.repositories),
+      organizationMembers: deps.repositories.organizations.organizationMembers,
+      organizationSettings: deps.repositories.settings.organizationSettings,
+      permissionGrants: deps.repositories.authorization.permissionGrants,
+      explicitDenyRules: deps.repositories.authorization.explicitDenyRules,
+      auditEvents: deps.repositories.audit.auditEvents,
+      transactionPort: deps.transactionPort,
+      eventBus: deps.eventBus,
+      ...(deps.now !== undefined ? { now: deps.now } : {}),
+      ...(deps.generateUuid !== undefined ? { generateUuid: deps.generateUuid } : {}),
+    }),
+    dependencies: new DependencyService({
+      taskDependencies: deps.repositories.dependencies.taskDependencies,
+      workContext: createDependencyWorkContextAdapter(deps.repositories),
+      organizationMembers: deps.repositories.organizations.organizationMembers,
+      organizationSettings: deps.repositories.settings.organizationSettings,
+      permissionGrants: deps.repositories.authorization.permissionGrants,
+      explicitDenyRules: deps.repositories.authorization.explicitDenyRules,
+      auditEvents: deps.repositories.audit.auditEvents,
+      transactionPort: deps.transactionPort,
+      eventBus: deps.eventBus,
+      ...(deps.now !== undefined ? { now: deps.now } : {}),
+      ...(deps.generateUuid !== undefined ? { generateUuid: deps.generateUuid } : {}),
+    }),
+    impediments: new ImpedimentService({
+      impediments: deps.repositories.impediments.impediments,
+      workContext: createImpedimentWorkContextAdapter(deps.repositories),
       organizationMembers: deps.repositories.organizations.organizationMembers,
       organizationSettings: deps.repositories.settings.organizationSettings,
       permissionGrants: deps.repositories.authorization.permissionGrants,
@@ -1574,6 +1755,18 @@ export function createMswHandlers(deps: MswCompositionDependencies): readonly Ht
           'organizationId',
         );
         const projectId = asProjectId(String(params.projectId ?? ''), 'projectId');
+        const url = new URL(request.url);
+        const includeDeleted = url.searchParams.get('includeDeleted') === 'true';
+
+        if (includeDeleted) {
+          const tasks = await services.tasks.listProjectTasks(
+            actorUserId,
+            organizationId,
+            projectId,
+            { includeDeleted: true },
+          );
+          return buildSuccessResponse(tasks, correlationId, now, 200);
+        }
 
         const board = await services.kanban.getProjectBoard(actorUserId, organizationId, projectId);
         return buildSuccessResponse(
@@ -1824,6 +2017,1015 @@ export function createMswHandlers(deps: MswCompositionDependencies): readonly Ht
         );
 
         return buildSuccessResponse(moved, correlationId, now, 200);
+      }),
+    ),
+
+    // -------------------------------------------------------------------------
+    // Phase 07 — Tasks, Subtasks, Comments, Attachments, Tags, Dependencies & Impediments
+    // -------------------------------------------------------------------------
+    http.post(
+      '*/api/v1/organizations/:organizationId/projects/:projectId/tasks',
+      withSimulatedEndpoint(deps, async ({ request, params, correlationId, now, nextUuid }) => {
+        const actorUserId = requireActorUserId(request);
+        const organizationId = asOrganizationId(
+          String(params.organizationId ?? ''),
+          'organizationId',
+        );
+        const projectId = asProjectId(String(params.projectId ?? ''), 'projectId');
+        const rawBody = (await request.json().catch(() => null)) as CreateTaskInput | null;
+        if (!rawBody || typeof rawBody !== 'object') {
+          throw new ValidationError('Invalid JSON body for task creation.');
+        }
+
+        const created = await services.tasks.createTask(actorUserId, organizationId, projectId, {
+          ...rawBody,
+          correlationId: asCorrelationId(isUuid(correlationId) ? correlationId : nextUuid()),
+        });
+
+        return buildSuccessResponse(created, correlationId, now, 201);
+      }),
+    ),
+
+    http.get(
+      '*/api/v1/organizations/:organizationId/tasks/:taskId',
+      withSimulatedEndpoint(deps, async ({ request, params, correlationId, now }) => {
+        const actorUserId = requireActorUserId(request);
+        const organizationId = asOrganizationId(
+          String(params.organizationId ?? ''),
+          'organizationId',
+        );
+        const taskId = asTaskId(String(params.taskId ?? ''), 'taskId');
+
+        const detail = await services.tasks.getTaskDetail(actorUserId, organizationId, taskId);
+        return buildSuccessResponse(detail, correlationId, now, 200);
+      }),
+    ),
+
+    http.patch(
+      '*/api/v1/organizations/:organizationId/tasks/:taskId',
+      withSimulatedEndpoint(deps, async ({ request, params, correlationId, now, nextUuid }) => {
+        const actorUserId = requireActorUserId(request);
+        const organizationId = asOrganizationId(
+          String(params.organizationId ?? ''),
+          'organizationId',
+        );
+        const taskId = asTaskId(String(params.taskId ?? ''), 'taskId');
+        const rawBody = (await request.json().catch(() => null)) as UpdateTaskInput | null;
+        if (!rawBody || typeof rawBody !== 'object') {
+          throw new ValidationError('Invalid JSON body for task update.');
+        }
+
+        const updated = await services.tasks.updateTask(actorUserId, organizationId, taskId, {
+          ...rawBody,
+          correlationId: asCorrelationId(isUuid(correlationId) ? correlationId : nextUuid()),
+        });
+
+        return buildSuccessResponse(updated, correlationId, now, 200);
+      }),
+    ),
+
+    http.delete(
+      '*/api/v1/organizations/:organizationId/tasks/:taskId',
+      withSimulatedEndpoint(deps, async ({ request, params, correlationId, now, nextUuid }) => {
+        const actorUserId = requireActorUserId(request);
+        const organizationId = asOrganizationId(
+          String(params.organizationId ?? ''),
+          'organizationId',
+        );
+        const taskId = asTaskId(String(params.taskId ?? ''), 'taskId');
+        const url = new URL(request.url);
+        const rawBody = (await request.json().catch(() => null)) as {
+          readonly reason?: string;
+        } | null;
+        const reason = rawBody?.reason ?? url.searchParams.get('reason') ?? undefined;
+
+        const deleted = await services.tasks.deleteTask(actorUserId, organizationId, taskId, {
+          ...(reason !== undefined ? { reason } : {}),
+          correlationId: asCorrelationId(isUuid(correlationId) ? correlationId : nextUuid()),
+        });
+
+        return buildSuccessResponse(deleted, correlationId, now, 200);
+      }),
+    ),
+
+    http.post(
+      '*/api/v1/organizations/:organizationId/tasks/:taskId/restore',
+      withSimulatedEndpoint(deps, async ({ request, params, correlationId, now, nextUuid }) => {
+        const actorUserId = requireActorUserId(request);
+        const organizationId = asOrganizationId(
+          String(params.organizationId ?? ''),
+          'organizationId',
+        );
+        const taskId = asTaskId(String(params.taskId ?? ''), 'taskId');
+        const rawBody = (await request.json().catch(() => null)) as {
+          readonly reason?: string;
+        } | null;
+
+        const restored = await services.tasks.restoreTask(actorUserId, organizationId, taskId, {
+          ...(rawBody?.reason !== undefined ? { reason: rawBody.reason } : {}),
+          correlationId: asCorrelationId(isUuid(correlationId) ? correlationId : nextUuid()),
+        });
+
+        return buildSuccessResponse(restored, correlationId, now, 200);
+      }),
+    ),
+
+    http.post(
+      '*/api/v1/organizations/:organizationId/tasks/:taskId/assign',
+      withSimulatedEndpoint(deps, async ({ request, params, correlationId, now, nextUuid }) => {
+        const actorUserId = requireActorUserId(request);
+        const organizationId = asOrganizationId(
+          String(params.organizationId ?? ''),
+          'organizationId',
+        );
+        const taskId = asTaskId(String(params.taskId ?? ''), 'taskId');
+        const rawBody = (await request.json().catch(() => null)) as AssignTaskInput | null;
+        if (!rawBody || typeof rawBody !== 'object') {
+          throw new ValidationError('Invalid JSON body for task assignment.');
+        }
+
+        const assigned = await services.tasks.assignTask(actorUserId, organizationId, taskId, {
+          ...rawBody,
+          correlationId: asCorrelationId(isUuid(correlationId) ? correlationId : nextUuid()),
+        });
+
+        return buildSuccessResponse(assigned, correlationId, now, 200);
+      }),
+    ),
+
+    http.post(
+      '*/api/v1/organizations/:organizationId/tasks/:taskId/participants',
+      withSimulatedEndpoint(deps, async ({ request, params, correlationId, now, nextUuid }) => {
+        const actorUserId = requireActorUserId(request);
+        const organizationId = asOrganizationId(
+          String(params.organizationId ?? ''),
+          'organizationId',
+        );
+        const taskId = asTaskId(String(params.taskId ?? ''), 'taskId');
+        const rawBody = (await request.json().catch(() => null)) as {
+          readonly userId?: string;
+        } | null;
+
+        if (!rawBody || typeof rawBody.userId !== 'string') {
+          throw new ValidationError('Field "userId" is required to add a task participant.');
+        }
+
+        const participant = await services.tasks.addTaskParticipant(
+          actorUserId,
+          organizationId,
+          taskId,
+          {
+            userId: asUserId(rawBody.userId, 'userId'),
+            correlationId: asCorrelationId(isUuid(correlationId) ? correlationId : nextUuid()),
+          },
+        );
+
+        return buildSuccessResponse(participant, correlationId, now, 201);
+      }),
+    ),
+
+    http.delete(
+      '*/api/v1/organizations/:organizationId/tasks/:taskId/participants/:userId',
+      withSimulatedEndpoint(deps, async ({ request, params, correlationId, now, nextUuid }) => {
+        const actorUserId = requireActorUserId(request);
+        const organizationId = asOrganizationId(
+          String(params.organizationId ?? ''),
+          'organizationId',
+        );
+        const taskId = asTaskId(String(params.taskId ?? ''), 'taskId');
+        const targetUserId = asUserId(String(params.userId ?? ''), 'userId');
+
+        const removed = await services.tasks.removeTaskParticipant(
+          actorUserId,
+          organizationId,
+          taskId,
+          targetUserId,
+          {
+            correlationId: asCorrelationId(isUuid(correlationId) ? correlationId : nextUuid()),
+          },
+        );
+
+        return buildSuccessResponse(removed, correlationId, now, 200);
+      }),
+    ),
+
+    http.post(
+      '*/api/v1/organizations/:organizationId/tasks/:taskId/start',
+      withSimulatedEndpoint(deps, async ({ request, params, correlationId, now, nextUuid }) => {
+        const actorUserId = requireActorUserId(request);
+        const organizationId = asOrganizationId(
+          String(params.organizationId ?? ''),
+          'organizationId',
+        );
+        const taskId = asTaskId(String(params.taskId ?? ''), 'taskId');
+
+        const started = await services.tasks.startTask(actorUserId, organizationId, taskId, {
+          correlationId: asCorrelationId(isUuid(correlationId) ? correlationId : nextUuid()),
+        });
+
+        return buildSuccessResponse(started, correlationId, now, 200);
+      }),
+    ),
+
+    http.post(
+      '*/api/v1/organizations/:organizationId/tasks/:taskId/pause',
+      withSimulatedEndpoint(deps, async ({ request, params, correlationId, now, nextUuid }) => {
+        const actorUserId = requireActorUserId(request);
+        const organizationId = asOrganizationId(
+          String(params.organizationId ?? ''),
+          'organizationId',
+        );
+        const taskId = asTaskId(String(params.taskId ?? ''), 'taskId');
+        const rawBody = (await request.json().catch(() => null)) as PauseTaskInput | null;
+        if (!rawBody || typeof rawBody !== 'object') {
+          throw new ValidationError('Invalid JSON body for task pause.');
+        }
+
+        const result = await services.tasks.pauseTask(actorUserId, organizationId, taskId, {
+          ...rawBody,
+          correlationId: asCorrelationId(isUuid(correlationId) ? correlationId : nextUuid()),
+        });
+
+        return buildSuccessResponse(result, correlationId, now, 200);
+      }),
+    ),
+
+    http.post(
+      '*/api/v1/organizations/:organizationId/tasks/:taskId/resume',
+      withSimulatedEndpoint(deps, async ({ request, params, correlationId, now, nextUuid }) => {
+        const actorUserId = requireActorUserId(request);
+        const organizationId = asOrganizationId(
+          String(params.organizationId ?? ''),
+          'organizationId',
+        );
+        const taskId = asTaskId(String(params.taskId ?? ''), 'taskId');
+
+        const resumed = await services.tasks.resumeTask(actorUserId, organizationId, taskId, {
+          correlationId: asCorrelationId(isUuid(correlationId) ? correlationId : nextUuid()),
+        });
+
+        return buildSuccessResponse(resumed, correlationId, now, 200);
+      }),
+    ),
+
+    http.post(
+      '*/api/v1/organizations/:organizationId/tasks/:taskId/complete',
+      withSimulatedEndpoint(deps, async ({ request, params, correlationId, now, nextUuid }) => {
+        const actorUserId = requireActorUserId(request);
+        const organizationId = asOrganizationId(
+          String(params.organizationId ?? ''),
+          'organizationId',
+        );
+        const taskId = asTaskId(String(params.taskId ?? ''), 'taskId');
+        const rawBody = (await request.json().catch(() => null)) as CompleteTaskInput | null;
+
+        const completed = await services.tasks.completeTask(actorUserId, organizationId, taskId, {
+          ...(rawBody?.dependencyOverrideJustification !== undefined
+            ? { dependencyOverrideJustification: rawBody.dependencyOverrideJustification }
+            : {}),
+          correlationId: asCorrelationId(isUuid(correlationId) ? correlationId : nextUuid()),
+        });
+
+        return buildSuccessResponse(completed, correlationId, now, 200);
+      }),
+    ),
+
+    http.post(
+      '*/api/v1/organizations/:organizationId/tasks/:taskId/cancel',
+      withSimulatedEndpoint(deps, async ({ request, params, correlationId, now, nextUuid }) => {
+        const actorUserId = requireActorUserId(request);
+        const organizationId = asOrganizationId(
+          String(params.organizationId ?? ''),
+          'organizationId',
+        );
+        const taskId = asTaskId(String(params.taskId ?? ''), 'taskId');
+        const rawBody = (await request.json().catch(() => null)) as CancelTaskInput | null;
+        if (!rawBody || typeof rawBody !== 'object') {
+          throw new ValidationError('Invalid JSON body for task cancellation.');
+        }
+
+        const cancelled = await services.tasks.cancelTask(actorUserId, organizationId, taskId, {
+          ...rawBody,
+          correlationId: asCorrelationId(isUuid(correlationId) ? correlationId : nextUuid()),
+        });
+
+        return buildSuccessResponse(cancelled, correlationId, now, 200);
+      }),
+    ),
+
+    http.post(
+      '*/api/v1/organizations/:organizationId/tasks/:taskId/cancellation-requests',
+      withSimulatedEndpoint(deps, async ({ request, params, correlationId, now, nextUuid }) => {
+        const actorUserId = requireActorUserId(request);
+        const organizationId = asOrganizationId(
+          String(params.organizationId ?? ''),
+          'organizationId',
+        );
+        const taskId = asTaskId(String(params.taskId ?? ''), 'taskId');
+        const rawBody = (await request.json().catch(() => null)) as CancelTaskInput | null;
+        if (!rawBody || typeof rawBody !== 'object') {
+          throw new ValidationError('Invalid JSON body for task cancellation request.');
+        }
+
+        const requested = await services.tasks.requestTaskCancellation(
+          actorUserId,
+          organizationId,
+          taskId,
+          {
+            ...rawBody,
+            correlationId: asCorrelationId(isUuid(correlationId) ? correlationId : nextUuid()),
+          },
+        );
+
+        return buildSuccessResponse(requested, correlationId, now, 201);
+      }),
+    ),
+
+    http.post(
+      '*/api/v1/organizations/:organizationId/tasks/:taskId/reopen',
+      withSimulatedEndpoint(deps, async ({ request, params, correlationId, now, nextUuid }) => {
+        const actorUserId = requireActorUserId(request);
+        const organizationId = asOrganizationId(
+          String(params.organizationId ?? ''),
+          'organizationId',
+        );
+        const taskId = asTaskId(String(params.taskId ?? ''), 'taskId');
+        const rawBody = (await request.json().catch(() => null)) as ReopenTaskInput | null;
+
+        const reopened = await services.tasks.reopenTask(actorUserId, organizationId, taskId, {
+          ...(rawBody?.reason !== undefined ? { reason: rawBody.reason } : {}),
+          ...(rawBody?.targetColumnId !== undefined
+            ? { targetColumnId: asBoardColumnId(rawBody.targetColumnId, 'targetColumnId') }
+            : {}),
+          correlationId: asCorrelationId(isUuid(correlationId) ? correlationId : nextUuid()),
+        });
+
+        return buildSuccessResponse(reopened, correlationId, now, 200);
+      }),
+    ),
+
+    http.get(
+      '*/api/v1/organizations/:organizationId/tasks/:taskId/deadline-history',
+      withSimulatedEndpoint(deps, async ({ request, params, correlationId, now }) => {
+        const actorUserId = requireActorUserId(request);
+        const organizationId = asOrganizationId(
+          String(params.organizationId ?? ''),
+          'organizationId',
+        );
+        const taskId = asTaskId(String(params.taskId ?? ''), 'taskId');
+
+        const history = await services.tasks.listTaskDeadlineHistory(
+          actorUserId,
+          organizationId,
+          taskId,
+        );
+
+        return buildSuccessResponse(history, correlationId, now, 200);
+      }),
+    ),
+
+    // Subtasks
+    http.post(
+      '*/api/v1/organizations/:organizationId/tasks/:taskId/subtasks',
+      withSimulatedEndpoint(deps, async ({ request, params, correlationId, now, nextUuid }) => {
+        const actorUserId = requireActorUserId(request);
+        const organizationId = asOrganizationId(
+          String(params.organizationId ?? ''),
+          'organizationId',
+        );
+        const taskId = asTaskId(String(params.taskId ?? ''), 'taskId');
+        const rawBody = (await request.json().catch(() => null)) as CreateSubtaskInput | null;
+        if (!rawBody || typeof rawBody !== 'object') {
+          throw new ValidationError('Invalid JSON body for subtask creation.');
+        }
+
+        const created = await services.tasks.createSubtask(actorUserId, organizationId, taskId, {
+          ...rawBody,
+          correlationId: asCorrelationId(isUuid(correlationId) ? correlationId : nextUuid()),
+        });
+
+        return buildSuccessResponse(created, correlationId, now, 201);
+      }),
+    ),
+
+    http.post(
+      '*/api/v1/organizations/:organizationId/tasks/:taskId/subtasks/reorder',
+      withSimulatedEndpoint(deps, async ({ request, params, correlationId, now, nextUuid }) => {
+        const actorUserId = requireActorUserId(request);
+        const organizationId = asOrganizationId(
+          String(params.organizationId ?? ''),
+          'organizationId',
+        );
+        const taskId = asTaskId(String(params.taskId ?? ''), 'taskId');
+        const rawBody = (await request.json().catch(() => null)) as {
+          readonly orderedSubtaskIds?: readonly SubtaskId[];
+        } | null;
+
+        if (!rawBody || !Array.isArray(rawBody.orderedSubtaskIds)) {
+          throw new ValidationError('Field "orderedSubtaskIds" (array of UUIDs) is required.');
+        }
+
+        const reordered = await services.tasks.reorderSubtasks(
+          actorUserId,
+          organizationId,
+          taskId,
+          rawBody.orderedSubtaskIds,
+          {
+            correlationId: asCorrelationId(isUuid(correlationId) ? correlationId : nextUuid()),
+          },
+        );
+
+        return buildSuccessResponse(reordered, correlationId, now, 200);
+      }),
+    ),
+
+    http.patch(
+      '*/api/v1/organizations/:organizationId/tasks/:taskId/subtasks/:subtaskId',
+      withSimulatedEndpoint(deps, async ({ request, params, correlationId, now, nextUuid }) => {
+        const actorUserId = requireActorUserId(request);
+        const organizationId = asOrganizationId(
+          String(params.organizationId ?? ''),
+          'organizationId',
+        );
+        const taskId = asTaskId(String(params.taskId ?? ''), 'taskId');
+        const subtaskId = asSubtaskId(String(params.subtaskId ?? ''), 'subtaskId');
+        const rawBody = (await request.json().catch(() => null)) as UpdateSubtaskInput | null;
+        if (!rawBody || typeof rawBody !== 'object') {
+          throw new ValidationError('Invalid JSON body for subtask update.');
+        }
+
+        const updated = await services.tasks.updateSubtask(
+          actorUserId,
+          organizationId,
+          taskId,
+          subtaskId,
+          {
+            ...rawBody,
+            correlationId: asCorrelationId(isUuid(correlationId) ? correlationId : nextUuid()),
+          },
+        );
+
+        return buildSuccessResponse(updated, correlationId, now, 200);
+      }),
+    ),
+
+    http.post(
+      '*/api/v1/organizations/:organizationId/tasks/:taskId/subtasks/:subtaskId/assign',
+      withSimulatedEndpoint(deps, async ({ request, params, correlationId, now, nextUuid }) => {
+        const actorUserId = requireActorUserId(request);
+        const organizationId = asOrganizationId(
+          String(params.organizationId ?? ''),
+          'organizationId',
+        );
+        const taskId = asTaskId(String(params.taskId ?? ''), 'taskId');
+        const subtaskId = asSubtaskId(String(params.subtaskId ?? ''), 'subtaskId');
+        const rawBody = (await request.json().catch(() => null)) as AssignSubtaskInput | null;
+        if (!rawBody || typeof rawBody !== 'object') {
+          throw new ValidationError('Invalid JSON body for subtask assignment.');
+        }
+
+        const assigned = await services.tasks.assignSubtask(
+          actorUserId,
+          organizationId,
+          taskId,
+          subtaskId,
+          {
+            ...rawBody,
+            correlationId: asCorrelationId(isUuid(correlationId) ? correlationId : nextUuid()),
+          },
+        );
+
+        return buildSuccessResponse(assigned, correlationId, now, 200);
+      }),
+    ),
+
+    http.post(
+      '*/api/v1/organizations/:organizationId/tasks/:taskId/subtasks/:subtaskId/complete',
+      withSimulatedEndpoint(deps, async ({ request, params, correlationId, now, nextUuid }) => {
+        const actorUserId = requireActorUserId(request);
+        const organizationId = asOrganizationId(
+          String(params.organizationId ?? ''),
+          'organizationId',
+        );
+        const taskId = asTaskId(String(params.taskId ?? ''), 'taskId');
+        const subtaskId = asSubtaskId(String(params.subtaskId ?? ''), 'subtaskId');
+
+        const completed = await services.tasks.completeSubtask(
+          actorUserId,
+          organizationId,
+          taskId,
+          subtaskId,
+          {
+            correlationId: asCorrelationId(isUuid(correlationId) ? correlationId : nextUuid()),
+          },
+        );
+
+        return buildSuccessResponse(completed, correlationId, now, 200);
+      }),
+    ),
+
+    http.delete(
+      '*/api/v1/organizations/:organizationId/tasks/:taskId/subtasks/:subtaskId',
+      withSimulatedEndpoint(deps, async ({ request, params, correlationId, now, nextUuid }) => {
+        const actorUserId = requireActorUserId(request);
+        const organizationId = asOrganizationId(
+          String(params.organizationId ?? ''),
+          'organizationId',
+        );
+        const taskId = asTaskId(String(params.taskId ?? ''), 'taskId');
+        const subtaskId = asSubtaskId(String(params.subtaskId ?? ''), 'subtaskId');
+
+        const result = await services.tasks.deleteSubtask(
+          actorUserId,
+          organizationId,
+          taskId,
+          subtaskId,
+          {
+            correlationId: asCorrelationId(isUuid(correlationId) ? correlationId : nextUuid()),
+          },
+        );
+
+        return buildSuccessResponse(result, correlationId, now, 200);
+      }),
+    ),
+
+    // Comments
+    http.get(
+      '*/api/v1/organizations/:organizationId/tasks/:taskId/comments',
+      withSimulatedEndpoint(deps, async ({ request, params, correlationId, now }) => {
+        const actorUserId = requireActorUserId(request);
+        const organizationId = asOrganizationId(
+          String(params.organizationId ?? ''),
+          'organizationId',
+        );
+        const taskId = asTaskId(String(params.taskId ?? ''), 'taskId');
+
+        const comments = await services.tasks.listTaskComments(actorUserId, organizationId, taskId);
+        return buildSuccessResponse(comments, correlationId, now, 200);
+      }),
+    ),
+
+    http.post(
+      '*/api/v1/organizations/:organizationId/tasks/:taskId/comments',
+      withSimulatedEndpoint(deps, async ({ request, params, correlationId, now, nextUuid }) => {
+        const actorUserId = requireActorUserId(request);
+        const organizationId = asOrganizationId(
+          String(params.organizationId ?? ''),
+          'organizationId',
+        );
+        const taskId = asTaskId(String(params.taskId ?? ''), 'taskId');
+        const rawBody = (await request.json().catch(() => null)) as TaskCommentInput | null;
+        if (!rawBody || typeof rawBody !== 'object') {
+          throw new ValidationError('Invalid JSON body for comment creation.');
+        }
+
+        const created = await services.tasks.addTaskComment(actorUserId, organizationId, taskId, {
+          ...rawBody,
+          correlationId: asCorrelationId(isUuid(correlationId) ? correlationId : nextUuid()),
+        });
+
+        return buildSuccessResponse(created, correlationId, now, 201);
+      }),
+    ),
+
+    http.patch(
+      '*/api/v1/organizations/:organizationId/tasks/:taskId/comments/:commentId',
+      withSimulatedEndpoint(deps, async ({ request, params, correlationId, now, nextUuid }) => {
+        const actorUserId = requireActorUserId(request);
+        const organizationId = asOrganizationId(
+          String(params.organizationId ?? ''),
+          'organizationId',
+        );
+        const taskId = asTaskId(String(params.taskId ?? ''), 'taskId');
+        const commentId = asTaskCommentId(String(params.commentId ?? ''), 'commentId');
+        const rawBody = (await request.json().catch(() => null)) as TaskCommentInput | null;
+        if (!rawBody || typeof rawBody !== 'object') {
+          throw new ValidationError('Invalid JSON body for comment update.');
+        }
+
+        const updated = await services.tasks.updateTaskComment(
+          actorUserId,
+          organizationId,
+          taskId,
+          commentId,
+          {
+            ...rawBody,
+            correlationId: asCorrelationId(isUuid(correlationId) ? correlationId : nextUuid()),
+          },
+        );
+
+        return buildSuccessResponse(updated, correlationId, now, 200);
+      }),
+    ),
+
+    http.delete(
+      '*/api/v1/organizations/:organizationId/tasks/:taskId/comments/:commentId',
+      withSimulatedEndpoint(deps, async ({ request, params, correlationId, now, nextUuid }) => {
+        const actorUserId = requireActorUserId(request);
+        const organizationId = asOrganizationId(
+          String(params.organizationId ?? ''),
+          'organizationId',
+        );
+        const taskId = asTaskId(String(params.taskId ?? ''), 'taskId');
+        const commentId = asTaskCommentId(String(params.commentId ?? ''), 'commentId');
+        const url = new URL(request.url);
+        const rawBody = (await request.json().catch(() => null)) as {
+          readonly reason?: string;
+        } | null;
+        const reason = rawBody?.reason ?? url.searchParams.get('reason') ?? undefined;
+
+        const deleted = await services.tasks.deleteTaskComment(
+          actorUserId,
+          organizationId,
+          taskId,
+          commentId,
+          {
+            ...(reason !== undefined ? { reason } : {}),
+            correlationId: asCorrelationId(isUuid(correlationId) ? correlationId : nextUuid()),
+          },
+        );
+
+        return buildSuccessResponse(deleted, correlationId, now, 200);
+      }),
+    ),
+
+    // Attachments (contentBase64 <-> Uint8Array conversion strictly at MSW boundary)
+    http.get(
+      '*/api/v1/organizations/:organizationId/tasks/:taskId/attachments',
+      withSimulatedEndpoint(deps, async ({ request, params, correlationId, now }) => {
+        const actorUserId = requireActorUserId(request);
+        const organizationId = asOrganizationId(
+          String(params.organizationId ?? ''),
+          'organizationId',
+        );
+        const taskId = asTaskId(String(params.taskId ?? ''), 'taskId');
+
+        const attachments = await services.tasks.listTaskAttachments(
+          actorUserId,
+          organizationId,
+          taskId,
+        );
+        return buildSuccessResponse(attachments, correlationId, now, 200);
+      }),
+    ),
+
+    http.post(
+      '*/api/v1/organizations/:organizationId/tasks/:taskId/attachments',
+      withSimulatedEndpoint(deps, async ({ request, params, correlationId, now, nextUuid }) => {
+        const actorUserId = requireActorUserId(request);
+        const organizationId = asOrganizationId(
+          String(params.organizationId ?? ''),
+          'organizationId',
+        );
+        const taskId = asTaskId(String(params.taskId ?? ''), 'taskId');
+        const rawBody = (await request.json().catch(() => null)) as {
+          readonly fileName?: string;
+          readonly mimeType?: string;
+          readonly contentBase64?: string;
+        } | null;
+
+        if (
+          !rawBody ||
+          typeof rawBody.fileName !== 'string' ||
+          typeof rawBody.mimeType !== 'string' ||
+          typeof rawBody.contentBase64 !== 'string'
+        ) {
+          throw new ValidationError(
+            'Attachment upload requires "fileName", "mimeType", and "contentBase64" strings.',
+          );
+        }
+
+        const bytes = decodeBase64ToUint8Array(rawBody.contentBase64);
+        const uploaded = await services.tasks.uploadTaskAttachment(
+          actorUserId,
+          organizationId,
+          taskId,
+          {
+            fileName: rawBody.fileName,
+            mimeType: rawBody.mimeType,
+            bytes,
+            correlationId: asCorrelationId(isUuid(correlationId) ? correlationId : nextUuid()),
+          },
+        );
+
+        return buildSuccessResponse(uploaded, correlationId, now, 201);
+      }),
+    ),
+
+    http.get(
+      '*/api/v1/organizations/:organizationId/tasks/:taskId/attachments/:attachmentId/content',
+      withSimulatedEndpoint(deps, async ({ request, params, correlationId, now }) => {
+        const actorUserId = requireActorUserId(request);
+        const organizationId = asOrganizationId(
+          String(params.organizationId ?? ''),
+          'organizationId',
+        );
+        const taskId = asTaskId(String(params.taskId ?? ''), 'taskId');
+        const attachmentId = asAttachmentId(String(params.attachmentId ?? ''), 'attachmentId');
+
+        const content = await services.tasks.getTaskAttachmentContent(
+          actorUserId,
+          organizationId,
+          taskId,
+          attachmentId,
+        );
+
+        return buildSuccessResponse(
+          {
+            attachment: content.attachment,
+            mimeType: content.mimeType,
+            contentBase64: encodeUint8ArrayToBase64(content.bytes),
+          },
+          correlationId,
+          now,
+          200,
+        );
+      }),
+    ),
+
+    http.delete(
+      '*/api/v1/organizations/:organizationId/tasks/:taskId/attachments/:attachmentId',
+      withSimulatedEndpoint(deps, async ({ request, params, correlationId, now, nextUuid }) => {
+        const actorUserId = requireActorUserId(request);
+        const organizationId = asOrganizationId(
+          String(params.organizationId ?? ''),
+          'organizationId',
+        );
+        const taskId = asTaskId(String(params.taskId ?? ''), 'taskId');
+        const attachmentId = asAttachmentId(String(params.attachmentId ?? ''), 'attachmentId');
+
+        const deleted = await services.tasks.deleteTaskAttachment(
+          actorUserId,
+          organizationId,
+          taskId,
+          attachmentId,
+          {
+            correlationId: asCorrelationId(isUuid(correlationId) ? correlationId : nextUuid()),
+          },
+        );
+
+        return buildSuccessResponse(deleted, correlationId, now, 200);
+      }),
+    ),
+
+    // Tags
+    http.get(
+      '*/api/v1/organizations/:organizationId/tags',
+      withSimulatedEndpoint(deps, async ({ request, params, correlationId, now }) => {
+        const actorUserId = requireActorUserId(request);
+        const organizationId = asOrganizationId(
+          String(params.organizationId ?? ''),
+          'organizationId',
+        );
+
+        const tags = await services.tasks.listTags(actorUserId, organizationId);
+        return buildSuccessResponse(tags, correlationId, now, 200);
+      }),
+    ),
+
+    http.post(
+      '*/api/v1/organizations/:organizationId/tags',
+      withSimulatedEndpoint(deps, async ({ request, params, correlationId, now, nextUuid }) => {
+        const actorUserId = requireActorUserId(request);
+        const organizationId = asOrganizationId(
+          String(params.organizationId ?? ''),
+          'organizationId',
+        );
+        const rawBody = (await request.json().catch(() => null)) as CreateTagInput | null;
+        if (!rawBody || typeof rawBody !== 'object') {
+          throw new ValidationError('Invalid JSON body for tag creation.');
+        }
+
+        const created = await services.tasks.createTag(actorUserId, organizationId, {
+          ...rawBody,
+          correlationId: asCorrelationId(isUuid(correlationId) ? correlationId : nextUuid()),
+        });
+
+        return buildSuccessResponse(created, correlationId, now, 201);
+      }),
+    ),
+
+    http.patch(
+      '*/api/v1/organizations/:organizationId/tags/:tagId',
+      withSimulatedEndpoint(deps, async ({ request, params, correlationId, now, nextUuid }) => {
+        const actorUserId = requireActorUserId(request);
+        const organizationId = asOrganizationId(
+          String(params.organizationId ?? ''),
+          'organizationId',
+        );
+        const tagId = asTagId(String(params.tagId ?? ''), 'tagId');
+        const rawBody = (await request.json().catch(() => null)) as UpdateTagInput | null;
+        if (!rawBody || typeof rawBody !== 'object') {
+          throw new ValidationError('Invalid JSON body for tag update.');
+        }
+
+        const updated = await services.tasks.updateTag(actorUserId, organizationId, tagId, {
+          ...rawBody,
+          correlationId: asCorrelationId(isUuid(correlationId) ? correlationId : nextUuid()),
+        });
+
+        return buildSuccessResponse(updated, correlationId, now, 200);
+      }),
+    ),
+
+    http.delete(
+      '*/api/v1/organizations/:organizationId/tags/:tagId',
+      withSimulatedEndpoint(deps, async ({ request, params, correlationId, now, nextUuid }) => {
+        const actorUserId = requireActorUserId(request);
+        const organizationId = asOrganizationId(
+          String(params.organizationId ?? ''),
+          'organizationId',
+        );
+        const tagId = asTagId(String(params.tagId ?? ''), 'tagId');
+
+        const deleted = await services.tasks.deleteTag(actorUserId, organizationId, tagId, {
+          correlationId: asCorrelationId(isUuid(correlationId) ? correlationId : nextUuid()),
+        });
+
+        return buildSuccessResponse(deleted, correlationId, now, 200);
+      }),
+    ),
+
+    // Dependencies
+    http.get(
+      '*/api/v1/organizations/:organizationId/tasks/:taskId/dependencies',
+      withSimulatedEndpoint(deps, async ({ request, params, correlationId, now }) => {
+        const actorUserId = requireActorUserId(request);
+        const organizationId = asOrganizationId(
+          String(params.organizationId ?? ''),
+          'organizationId',
+        );
+        const taskId = asTaskId(String(params.taskId ?? ''), 'taskId');
+
+        const dependencies = await services.dependencies.listTaskDependencies(
+          actorUserId,
+          organizationId,
+          taskId,
+        );
+        return buildSuccessResponse(dependencies, correlationId, now, 200);
+      }),
+    ),
+
+    http.post(
+      '*/api/v1/organizations/:organizationId/tasks/:taskId/dependencies',
+      withSimulatedEndpoint(deps, async ({ request, params, correlationId, now, nextUuid }) => {
+        const actorUserId = requireActorUserId(request);
+        const organizationId = asOrganizationId(
+          String(params.organizationId ?? ''),
+          'organizationId',
+        );
+        const taskId = asTaskId(String(params.taskId ?? ''), 'taskId');
+        const rawBody = (await request.json().catch(() => null)) as AddTaskDependencyInput | null;
+        if (!rawBody || typeof rawBody !== 'object') {
+          throw new ValidationError('Invalid JSON body for dependency creation.');
+        }
+
+        const added = await services.dependencies.addDependency(
+          actorUserId,
+          organizationId,
+          taskId,
+          {
+            ...rawBody,
+            correlationId: asCorrelationId(isUuid(correlationId) ? correlationId : nextUuid()),
+          },
+        );
+
+        return buildSuccessResponse(added, correlationId, now, 201);
+      }),
+    ),
+
+    http.delete(
+      '*/api/v1/organizations/:organizationId/tasks/:taskId/dependencies/:dependencyId',
+      withSimulatedEndpoint(deps, async ({ request, params, correlationId, now, nextUuid }) => {
+        const actorUserId = requireActorUserId(request);
+        const organizationId = asOrganizationId(
+          String(params.organizationId ?? ''),
+          'organizationId',
+        );
+        const taskId = asTaskId(String(params.taskId ?? ''), 'taskId');
+        const dependencyId = asTaskDependencyId(String(params.dependencyId ?? ''), 'dependencyId');
+
+        const removed = await services.dependencies.removeDependency(
+          actorUserId,
+          organizationId,
+          taskId,
+          dependencyId,
+          {
+            correlationId: asCorrelationId(isUuid(correlationId) ? correlationId : nextUuid()),
+          },
+        );
+
+        return buildSuccessResponse(removed, correlationId, now, 200);
+      }),
+    ),
+
+    // Impediments
+    http.get(
+      '*/api/v1/organizations/:organizationId/tasks/:taskId/impediments',
+      withSimulatedEndpoint(deps, async ({ request, params, correlationId, now }) => {
+        const actorUserId = requireActorUserId(request);
+        const organizationId = asOrganizationId(
+          String(params.organizationId ?? ''),
+          'organizationId',
+        );
+        const taskId = asTaskId(String(params.taskId ?? ''), 'taskId');
+
+        const impediments = await services.impediments.listTaskImpediments(
+          actorUserId,
+          organizationId,
+          taskId,
+        );
+        return buildSuccessResponse(impediments, correlationId, now, 200);
+      }),
+    ),
+
+    http.post(
+      '*/api/v1/organizations/:organizationId/tasks/:taskId/impediments',
+      withSimulatedEndpoint(deps, async ({ request, params, correlationId, now, nextUuid }) => {
+        const actorUserId = requireActorUserId(request);
+        const organizationId = asOrganizationId(
+          String(params.organizationId ?? ''),
+          'organizationId',
+        );
+        const taskId = asTaskId(String(params.taskId ?? ''), 'taskId');
+        const rawBody = (await request.json().catch(() => null)) as CreateImpedimentInput | null;
+        if (!rawBody || typeof rawBody !== 'object') {
+          throw new ValidationError('Invalid JSON body for impediment creation.');
+        }
+
+        const created = await services.impediments.createImpediment(
+          actorUserId,
+          organizationId,
+          taskId,
+          {
+            ...rawBody,
+            correlationId: asCorrelationId(isUuid(correlationId) ? correlationId : nextUuid()),
+          },
+        );
+
+        return buildSuccessResponse(created, correlationId, now, 201);
+      }),
+    ),
+
+    http.patch(
+      '*/api/v1/organizations/:organizationId/tasks/:taskId/impediments/:impedimentId',
+      withSimulatedEndpoint(deps, async ({ request, params, correlationId, now, nextUuid }) => {
+        const actorUserId = requireActorUserId(request);
+        const organizationId = asOrganizationId(
+          String(params.organizationId ?? ''),
+          'organizationId',
+        );
+        const taskId = asTaskId(String(params.taskId ?? ''), 'taskId');
+        const impedimentId = asImpedimentId(String(params.impedimentId ?? ''), 'impedimentId');
+        const rawBody = (await request.json().catch(() => null)) as UpdateImpedimentInput | null;
+        if (!rawBody || typeof rawBody !== 'object') {
+          throw new ValidationError('Invalid JSON body for impediment update.');
+        }
+
+        const updated = await services.impediments.updateImpediment(
+          actorUserId,
+          organizationId,
+          taskId,
+          impedimentId,
+          {
+            ...rawBody,
+            correlationId: asCorrelationId(isUuid(correlationId) ? correlationId : nextUuid()),
+          },
+        );
+
+        return buildSuccessResponse(updated, correlationId, now, 200);
+      }),
+    ),
+
+    http.post(
+      '*/api/v1/organizations/:organizationId/tasks/:taskId/impediments/:impedimentId/transition',
+      withSimulatedEndpoint(deps, async ({ request, params, correlationId, now, nextUuid }) => {
+        const actorUserId = requireActorUserId(request);
+        const organizationId = asOrganizationId(
+          String(params.organizationId ?? ''),
+          'organizationId',
+        );
+        const taskId = asTaskId(String(params.taskId ?? ''), 'taskId');
+        const impedimentId = asImpedimentId(String(params.impedimentId ?? ''), 'impedimentId');
+        const rawBody = (await request
+          .json()
+          .catch(() => null)) as TransitionImpedimentInput | null;
+        if (!rawBody || typeof rawBody !== 'object') {
+          throw new ValidationError('Invalid JSON body for impediment transition.');
+        }
+
+        const transitioned = await services.impediments.transitionImpediment(
+          actorUserId,
+          organizationId,
+          taskId,
+          impedimentId,
+          {
+            ...rawBody,
+            correlationId: asCorrelationId(isUuid(correlationId) ? correlationId : nextUuid()),
+          },
+        );
+
+        return buildSuccessResponse(transitioned, correlationId, now, 200);
       }),
     ),
 

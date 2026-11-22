@@ -1,3 +1,4 @@
+import { ConflictError } from '@/shared/errors';
 import {
   TRANSACTION_RESOURCES,
   parseIsoDateTimeMs,
@@ -47,6 +48,7 @@ import type {
   TaskPause,
   TaskPauseId,
 } from '../../domain/task';
+import { normalizeTagName } from '../../domain/task-policies';
 
 export class DexieTaskRepository implements TaskRepositoryPort {
   private readonly db: PmsDatabase;
@@ -61,6 +63,17 @@ export class DexieTaskRepository implements TaskRepositoryPort {
 
   async findById(organizationId: OrganizationId, taskId: TaskId): Promise<Task | null> {
     return findOrganizationScopedById(this.table, organizationId, taskId, 'Task');
+  }
+
+  async listByOrganization(
+    organizationId: OrganizationId,
+    options?: { readonly includeDeleted?: boolean },
+  ): Promise<readonly Task[]> {
+    return withPersistenceErrorHandling('Task.listByOrganization', async () => {
+      const records = await this.table.where('organizationId').equals(organizationId).toArray();
+      const filtered = filterSoftDeleted(records, options?.includeDeleted);
+      return filtered.sort((a, b) => a.order - b.order || a.id.localeCompare(b.id));
+    });
   }
 
   async listByProject(
@@ -132,6 +145,20 @@ export class DexieTaskParticipantRepository implements TaskParticipantRepository
     );
   }
 
+  async findByTaskAndUser(
+    organizationId: OrganizationId,
+    taskId: TaskId,
+    userId: UserId,
+  ): Promise<TaskParticipant | null> {
+    return withPersistenceErrorHandling('TaskParticipant.findByTaskAndUser', async () => {
+      const record = await this.table
+        .where('[organizationId+taskId+userId]')
+        .equals([organizationId, taskId, userId])
+        .first();
+      return record ?? null;
+    });
+  }
+
   async listByTask(
     organizationId: OrganizationId,
     taskId: TaskId,
@@ -183,6 +210,10 @@ export class DexieSubtaskRepository implements SubtaskRepositoryPort {
 
   async save(subtask: Subtask): Promise<void> {
     await saveOrganizationScopedEntity(this.table, subtask, 'Subtask');
+  }
+
+  async saveMany(organizationId: OrganizationId, subtasks: readonly Subtask[]): Promise<void> {
+    await saveManyOrganizationScopedEntities(this.table, organizationId, subtasks, 'Subtask');
   }
 
   async delete(organizationId: OrganizationId, subtaskId: SubtaskId): Promise<void> {
@@ -372,6 +403,14 @@ export class DexieTagRepository implements TagRepositoryPort {
     return findOrganizationScopedById(this.table, organizationId, tagId, 'Tag');
   }
 
+  async findByNormalizedName(organizationId: OrganizationId, name: string): Promise<Tag | null> {
+    const normalized = normalizeTagName(name);
+    return withPersistenceErrorHandling('Tag.findByNormalizedName', async () => {
+      const records = await this.table.where('organizationId').equals(organizationId).toArray();
+      return records.find((record) => normalizeTagName(record.name) === normalized) ?? null;
+    });
+  }
+
   async listByOrganization(organizationId: OrganizationId): Promise<readonly Tag[]> {
     return withPersistenceErrorHandling('Tag.listByOrganization', async () => {
       const records = await this.table.where('organizationId').equals(organizationId).toArray();
@@ -381,6 +420,19 @@ export class DexieTagRepository implements TagRepositoryPort {
   }
 
   async save(tag: Tag): Promise<void> {
+    const normalized = normalizeTagName(tag.name);
+    await withPersistenceErrorHandling('Tag.save', async () => {
+      const orgTags = await this.table.where('organizationId').equals(tag.organizationId).toArray();
+      const collision = orgTags.find(
+        (existing) => existing.id !== tag.id && normalizeTagName(existing.name) === normalized,
+      );
+      if (collision !== undefined) {
+        throw new ConflictError(`Tag "${tag.name.trim()}" already exists in this organization.`, {
+          details: { organizationId: tag.organizationId, tagId: collision.id },
+        });
+      }
+    });
+
     await saveOrganizationScopedEntity(this.table, tag, 'Tag');
   }
 

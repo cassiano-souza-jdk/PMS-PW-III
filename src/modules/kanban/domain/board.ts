@@ -142,17 +142,17 @@ export function assertColumnCanBeDeleted(
   const remainingColumns = allBoardColumns.filter((candidate) => candidate.id !== column.id);
   assertValidBoardColumns(remainingColumns);
 
-  if (activeTaskCount === 0) {
-    return;
-  }
-
-  if (!migrationTargetColumn) {
+  if (activeTaskCount > 0 && !migrationTargetColumn) {
     throw new ConflictError(
       'Cannot delete a column containing tasks without migrating them to a valid target column.',
       {
         details: { columnId: column.id, activeTaskCount },
       },
     );
+  }
+
+  if (!migrationTargetColumn) {
+    return;
   }
 
   assertSameOrganization(

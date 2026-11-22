@@ -1051,4 +1051,121 @@ describe('KanbanService Integration (Board, Columns, WIP, Lifecycle, Pauses, Dep
       ).rejects.toThrowError(ConflictError);
     });
   });
+
+  describe('Endurecimentos da Fase 06 incorporados na Fase 07 (ADR-0011 §10)', () => {
+    it('Endurecimento 1: createQuickCard exige TASK_ASSIGN quando assigneeId for informado para terceiro (diferente do ator)', async () => {
+      const { admin, manager, member, organization, project } = await setupProjectFixture();
+
+      const defaults = createDefaultOrganizationSettings(organization.id, currentNow);
+      await container.repositories.settings.organizationSettings.save({
+        ...defaults,
+        pendingPermissionDefaults: {
+          ...defaults.pendingPermissionDefaults,
+          allowMemberCreateTaskWithoutGrant: true,
+        },
+      });
+
+      // MEMBER pode criar cartão sem assigneeId ou atribuído a si mesmo
+      const selfCard = await container.services.kanban.createQuickCard(
+        member.user.id,
+        organization.id,
+        project.id,
+        {
+          title: 'Card Próprio do Membro',
+          assigneeId: member.user.id,
+        },
+      );
+      expect(selfCard.assigneeId).toBe(member.user.id);
+
+      // MEMBER NÃO pode criar cartão atribuído a terceiro (manager) sem TASK_ASSIGN
+      await expect(
+        container.services.kanban.createQuickCard(member.user.id, organization.id, project.id, {
+          title: 'Card Atribuído a Terceiro sem TASK_ASSIGN',
+          assigneeId: manager.user.id,
+        }),
+      ).rejects.toThrowError(AuthorizationError);
+
+      // Concede TASK_ASSIGN ao MEMBER no projeto -> agora sucede
+      await container.services.authorization.grantPermission(admin.user.id, organization.id, {
+        granteeUserId: member.user.id,
+        permission: PERMISSION_CODES.TASK_ASSIGN,
+        scopeType: PERMISSION_SCOPE_TYPES.PROJECT,
+        scopeId: asEntityId(project.id),
+        reason: 'Permitir atribuição de quick card na sprint',
+      });
+
+      const delegatedCard = await container.services.kanban.createQuickCard(
+        member.user.id,
+        organization.id,
+        project.id,
+        {
+          title: 'Card Atribuído com TASK_ASSIGN',
+          assigneeId: manager.user.id,
+        },
+      );
+      expect(delegatedCard.assigneeId).toBe(manager.user.id);
+    });
+
+    it('Endurecimento 2: deleteColumn rejeita migrationTargetColumnId arquivada mesmo quando activeTaskCount === 0 (ex.: apenas tarefas soft-deleted)', async () => {
+      const { manager, organization, project, boardView } = await setupProjectFixture();
+      const reviewCol = boardView.columns[2]!;
+
+      const tempCol = await container.services.kanban.createColumn(
+        manager.user.id,
+        organization.id,
+        project.id,
+        {
+          name: 'Coluna Com Soft-Deleted',
+          columnRole: BOARD_COLUMN_ROLES.OPERATIONAL,
+          wipLimit: null,
+        },
+      );
+
+      // Arquiva coluna vazia reviewCol
+      await container.services.kanban.archiveColumn(
+        manager.user.id,
+        organization.id,
+        project.id,
+        reviewCol.id,
+      );
+
+      // Grava apenas uma tarefa soft-deleted dentro de tempCol (activeTaskCount === 0)
+      const softDeletedCard: Task = {
+        id: asTaskId(crypto.randomUUID()),
+        organizationId: organization.id,
+        projectId: project.id,
+        boardId: boardView.board.id,
+        columnId: tempCol.id,
+        title: 'Tarefa Excluída na Coluna',
+        status: TASK_STATUSES.TODO,
+        priority: PRIORITIES.LOW,
+        order: 1,
+        tagIds: [],
+        lastMovedAt: currentNow,
+        lastActivityAt: currentNow,
+        createdByUserId: manager.user.id,
+        createdAt: currentNow,
+        updatedAt: currentNow,
+        deletedAt: currentNow,
+        deletedBy: manager.user.id,
+      };
+      await container.repositories.tasks.tasks.save(softDeletedCard);
+
+      // Tentar excluir tempCol migrando para a coluna arquivada reviewCol deve falhar com ConflictError
+      await expect(
+        container.services.kanban.deleteColumn(
+          manager.user.id,
+          organization.id,
+          project.id,
+          tempCol.id,
+          { migrationTargetColumnId: reviewCol.id },
+        ),
+      ).rejects.toThrowError(ConflictError);
+
+      // Coluna e tarefa permanecem intactas
+      expect(
+        await container.repositories.kanban.boardColumns.findById(organization.id, tempCol.id),
+      ).not.toBeNull();
+    });
+  });
 });
