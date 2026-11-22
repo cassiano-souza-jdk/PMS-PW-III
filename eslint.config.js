@@ -11,6 +11,35 @@ import tseslint from 'typescript-eslint';
 
 const SAME_MODULE = { module: '{{ from.element.captured.module }}' };
 const OTHER_MODULE = { module: '!{{ from.element.captured.module }}' };
+const MODULE_LAYER_TYPES = [
+  'module-domain',
+  'module-application',
+  'module-infrastructure',
+  'module-presentation',
+  'module-public-api',
+];
+
+function createModuleDagDisallowPolicy(sourceModule, forbiddenModules, message) {
+  return {
+    from: {
+      element: {
+        type: MODULE_LAYER_TYPES,
+        captured: { module: sourceModule },
+      },
+    },
+    disallow: [
+      {
+        to: {
+          element: {
+            type: MODULE_LAYER_TYPES,
+            captured: { module: forbiddenModules },
+          },
+        },
+        message,
+      },
+    ],
+  };
+}
 
 const BOUNDARIES_ELEMENTS = [
   {
@@ -177,13 +206,7 @@ const BOUNDARIES_POLICIES = [
   {
     from: {
       element: {
-        type: [
-          'module-domain',
-          'module-application',
-          'module-infrastructure',
-          'module-presentation',
-          'module-public-api',
-        ],
+        type: MODULE_LAYER_TYPES,
         captured: { module: 'authorization' },
       },
     },
@@ -191,13 +214,7 @@ const BOUNDARIES_POLICIES = [
       {
         to: {
           element: {
-            type: [
-              'module-domain',
-              'module-application',
-              'module-infrastructure',
-              'module-presentation',
-              'module-public-api',
-            ],
+            type: MODULE_LAYER_TYPES,
             captured: OTHER_MODULE,
           },
         },
@@ -206,6 +223,28 @@ const BOUNDARIES_POLICIES = [
       },
     ],
   },
+  // Blindagem mecânica do DAG acíclico entre módulos (ADR-0010 §3.4 & ADR-0011 §3).
+  // Mantido antes da política de testes (`file: { categories: 'test' }`) para não bloquear `*.test.ts(x)`.
+  createModuleDagDisallowPolicy(
+    'tasks',
+    ['projects', 'kanban'],
+    'O módulo tasks não pode importar diretamente projects ou kanban (use portas locais em application/ports — ADR-0010 §3.4 e ADR-0011).',
+  ),
+  createModuleDagDisallowPolicy(
+    'projects',
+    ['teams', 'kanban'],
+    'O módulo projects não pode importar diretamente teams ou kanban (use portas locais em application/ports — ADR-0010 §3 e ADR-0011).',
+  ),
+  createModuleDagDisallowPolicy(
+    'dependencies',
+    ['tasks', 'projects', 'kanban'],
+    'O módulo dependencies não pode importar diretamente tasks, projects ou kanban (use portas locais em application/ports — ADR-0011).',
+  ),
+  createModuleDagDisallowPolicy(
+    'impediments',
+    ['tasks', 'projects', 'kanban'],
+    'O módulo impediments não pode importar diretamente tasks, projects ou kanban (use portas locais em application/ports — ADR-0011).',
+  ),
   // app-shell: app-shell, app-composition, module-presentation, module-public-api e shared-* (proibido module-infrastructure)
   {
     from: { element: { type: 'app-shell' } },

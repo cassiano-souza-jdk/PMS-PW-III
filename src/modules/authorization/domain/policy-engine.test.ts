@@ -411,6 +411,18 @@ describe('Authorization Policy Engine — 20 Minimum Acceptance Scenarios (permi
       expect(decision.allowed).toBe(false);
       expect(decision.reasonCode).toBe('DENIED_OUT_OF_SCOPE');
     }
+
+    const subtaskManageAttempt = evaluateAuthorization({
+      actor: member,
+      action: PERMISSION_CODES.SUBTASK_MANAGE,
+      resource: subtaskOnlyResource,
+      context: {
+        now: NOW,
+        policyConfig: { allowMemberManageSubtasksInAccessibleTask: true },
+      },
+    });
+    expect(subtaskManageAttempt.allowed).toBe(false);
+    expect(subtaskManageAttempt.reasonCode).toBe('DENIED_POLICY_DEFAULT_DENY');
   });
 
   it('Cenário 7: Revogação de concessão (ex.: ao remover participante) revoga acesso imediatamente', () => {
@@ -1125,5 +1137,165 @@ describe('Authorization Policy Engine — 20 Minimum Acceptance Scenarios (permi
       action: PERMISSION_CODES.ORGANIZATION_ROLES_MANAGE,
       requiresAudit: true,
     });
+  });
+});
+
+describe('Authorization Policy Engine — Phase 07 MANAGER Participant Symmetry (ADR-0011 §6)', () => {
+  it('allows participating MANAGER (not managing project) to manage subtasks when task actor and policy flag enabled, while preserving Cenário 6', () => {
+    const participatingManager = makeActor({
+      userId: USER_MANAGER,
+      organizationMembership: {
+        organizationId: ORG_A,
+        role: ORGANIZATION_ROLES.MANAGER,
+        status: MEMBERSHIP_STATUSES.ACTIVE,
+      },
+      managedProjectIds: [],
+      participatedProjectIds: [PROJECT_X],
+    });
+
+    const accessibleTask = makeResource({
+      kind: 'SUBTASK',
+      projectId: PROJECT_X,
+      taskId: TASK_1,
+      subtaskId: SUBTASK_1,
+      assigneeId: USER_MANAGER,
+      participantIds: [],
+    });
+
+    // Default Deny (flag false): negado fora de projeto administrado
+    expect(
+      evaluateAuthorization({
+        actor: participatingManager,
+        action: PERMISSION_CODES.SUBTASK_MANAGE,
+        resource: accessibleTask,
+        context: { now: NOW },
+      }),
+    ).toMatchObject({ allowed: false, reasonCode: 'DENIED_OUT_OF_SCOPE' });
+
+    // Flag habilitada + ator da tarefa participante do projeto -> permitido por simetria
+    expect(
+      evaluateAuthorization({
+        actor: participatingManager,
+        action: PERMISSION_CODES.SUBTASK_MANAGE,
+        resource: accessibleTask,
+        context: {
+          now: NOW,
+          policyConfig: { allowMemberManageSubtasksInAccessibleTask: true },
+        },
+      }),
+    ).toMatchObject({ allowed: true, reasonCode: 'ALLOWED_BY_ROLE' });
+
+    // Cenário 6 preservado: responsável apenas por subtarefa (isTaskActor: false) continua bloqueado na tarefa-pai
+    const subtaskOnlyForManager = makeResource({
+      kind: 'TASK',
+      projectId: PROJECT_X,
+      taskId: TASK_1,
+      subtaskId: SUBTASK_1,
+      assigneeId: USER_OTHER,
+      participantIds: [],
+      subtaskAssigneeId: USER_MANAGER,
+    });
+
+    expect(
+      evaluateAuthorization({
+        actor: participatingManager,
+        action: PERMISSION_CODES.TASK_UPDATE,
+        resource: subtaskOnlyForManager,
+        context: { now: NOW },
+      }),
+    ).toMatchObject({ allowed: false, reasonCode: 'DENIED_OUT_OF_SCOPE' });
+
+    expect(
+      evaluateAuthorization({
+        actor: participatingManager,
+        action: PERMISSION_CODES.SUBTASK_MANAGE,
+        resource: subtaskOnlyForManager,
+        context: {
+          now: NOW,
+          policyConfig: { allowMemberManageSubtasksInAccessibleTask: true },
+        },
+      }),
+    ).toMatchObject({ allowed: false, reasonCode: 'DENIED_OUT_OF_SCOPE' });
+  });
+
+  it('allows participating MANAGER (not managing project) to resolve own impediments or others impediments when policy flag enabled', () => {
+    const participatingManager = makeActor({
+      userId: USER_MANAGER,
+      organizationMembership: {
+        organizationId: ORG_A,
+        role: ORGANIZATION_ROLES.MANAGER,
+        status: MEMBERSHIP_STATUSES.ACTIVE,
+      },
+      managedProjectIds: [],
+      participatedProjectIds: [PROJECT_X],
+    });
+
+    const ownImpedimentOnTask = makeResource({
+      kind: 'IMPEDIMENT',
+      projectId: PROJECT_X,
+      taskId: TASK_1,
+      assigneeId: USER_OTHER,
+      participantIds: [USER_MANAGER],
+      createdBy: USER_MANAGER,
+    });
+
+    const othersImpedimentOnTask = makeResource({
+      kind: 'IMPEDIMENT',
+      projectId: PROJECT_X,
+      taskId: TASK_1,
+      assigneeId: USER_MANAGER,
+      participantIds: [],
+      createdBy: USER_OTHER,
+    });
+
+    // Impedimento aberto pelo próprio MANAGER em tarefa acessível -> permitido
+    expect(
+      evaluateAuthorization({
+        actor: participatingManager,
+        action: PERMISSION_CODES.IMPEDIMENT_RESOLVE,
+        resource: ownImpedimentOnTask,
+        context: { now: NOW },
+      }),
+    ).toMatchObject({ allowed: true, reasonCode: 'ALLOWED_BY_ROLE' });
+
+    // Impedimento aberto por terceiros com Default Deny -> negado
+    expect(
+      evaluateAuthorization({
+        actor: participatingManager,
+        action: PERMISSION_CODES.IMPEDIMENT_RESOLVE,
+        resource: othersImpedimentOnTask,
+        context: { now: NOW },
+      }),
+    ).toMatchObject({ allowed: false, reasonCode: 'DENIED_OUT_OF_SCOPE' });
+
+    // Impedimento aberto por terceiros com flag habilitada -> permitido por simetria
+    expect(
+      evaluateAuthorization({
+        actor: participatingManager,
+        action: PERMISSION_CODES.IMPEDIMENT_RESOLVE,
+        resource: othersImpedimentOnTask,
+        context: {
+          now: NOW,
+          policyConfig: { allowMemberResolveOthersImpediment: true },
+        },
+      }),
+    ).toMatchObject({ allowed: true, reasonCode: 'ALLOWED_BY_ROLE' });
+
+    // Sem vínculo na tarefa (isTaskActor: false) -> negado mesmo se criador ou com flag
+    expect(
+      evaluateAuthorization({
+        actor: participatingManager,
+        action: PERMISSION_CODES.IMPEDIMENT_RESOLVE,
+        resource: {
+          ...ownImpedimentOnTask,
+          assigneeId: USER_OTHER,
+          participantIds: [],
+        },
+        context: {
+          now: NOW,
+          policyConfig: { allowMemberResolveOthersImpediment: true },
+        },
+      }),
+    ).toMatchObject({ allowed: false, reasonCode: 'DENIED_OUT_OF_SCOPE' });
   });
 });

@@ -416,6 +416,8 @@ describe('Governance — Notifications, Backups Retention/Isolation & Default-De
       allowMemberChangePriorityOrDueDateWithoutGrant: false,
       allowFieldLevelTemporaryGrants: false,
       allowManagerViewIndividualProductivity: false,
+      allowMemberManageSubtasksInAccessibleTask: false,
+      allowMemberResolveOthersImpediment: false,
       trashRetentionDays: null,
       requireReinforcedConfirmationForIrreversibleActions: true,
       allowMemberTrashAccess: false,

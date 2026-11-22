@@ -1,6 +1,6 @@
 # Índice do pacote PMS
 
-Total de arquivos Markdown: 38
+Total de arquivos Markdown: 39
 
 -   `ACCESSIBILITY.md`
 -   `ADR/ADR-0001-modular-layered-architecture.md`
@@ -13,6 +13,7 @@ Total de arquivos Markdown: 38
 -   `ADR/ADR-0008-authentication-sessions-and-multi-organization-architecture.md`
 -   `ADR/ADR-0009-invitations-teams-and-permissions-management.md`
 -   `ADR/ADR-0010-projects-participants-and-kanban-architecture.md`
+-   `ADR/ADR-0011-tasks-subtasks-dependencies-and-impediments-architecture.md`
 -   `AGENT-ROLES.md`
 -   `AGENT-WORKFLOW.md`
 -   `AGENTS.md`
