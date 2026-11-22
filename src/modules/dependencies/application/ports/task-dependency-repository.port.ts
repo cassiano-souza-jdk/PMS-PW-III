@@ -6,6 +6,11 @@ export interface TaskDependencyRepositoryPort {
     organizationId: OrganizationId,
     dependencyId: TaskDependencyId,
   ): Promise<TaskDependency | null>;
+  findByPair(
+    organizationId: OrganizationId,
+    taskId: TaskId,
+    dependsOnTaskId: TaskId,
+  ): Promise<TaskDependency | null>;
   listByProject(
     organizationId: OrganizationId,
     projectId: ProjectId,

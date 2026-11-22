@@ -62,10 +62,13 @@ import {
   asTaskPauseId,
   assertTaskCanBeCancelled,
   assertTaskCanBeCompleted,
+  assertTaskCommentCanBeDeletedByActor,
+  assertTaskCommentCanBeEditedByAuthor,
   assertTaskCommentEditable,
   assertTaskPauseJustification,
   assertTaskReopenCreatesNewCycle,
   calculateTaskEffectiveDurationMs,
+  normalizeTagName,
   validateTaskAttachmentSize,
   type Subtask,
   type TaskComment,
@@ -265,6 +268,21 @@ describe('Kanban — Board Columns, WIP Limits & Card Movement Invariants', () =
     expect(() => assertColumnCanBeDeleted(colDone, [colInitial, colDone], 0)).toThrow(
       ConflictError,
     );
+
+    // Phase 06 Hardening 2: rejects archived migration target even when activeTaskCount === 0
+    const archivedDoing = makeColumn({ id: colDoing.id, archivedAt: T1 });
+    const activeExtra = makeColumn({
+      id: asBoardColumnId('42000000-0000-4000-8000-000000000004'),
+      name: 'Revisão',
+    });
+    expect(() =>
+      assertColumnCanBeDeleted(
+        colInitial,
+        [colInitial, archivedDoing, activeExtra, colDone],
+        0,
+        archivedDoing,
+      ),
+    ).toThrow(ConflictError);
   });
 
   it('counts BLOCKED toward WIP, excludes DONE/CANCELLED, blocks WIP overflow by default and audits authorized exceptions', () => {
@@ -517,6 +535,77 @@ describe('Tasks & Impediments — Completion, Pauses, Reopen Cycles & Attachment
     expect(() => assertTaskCommentEditable(systemComment)).toThrow(ConflictError);
     expect(() => assertTaskPauseJustification('   ')).toThrow(ValidationError);
     expect(() => assertTaskCanBeCancelled('')).toThrow(ValidationError);
+
+    const editableComment: TaskComment = {
+      ...systemComment,
+      id: asTaskCommentId('72000000-0000-4000-8000-000000000002'),
+      isSystem: false,
+      createdAt: T0,
+    };
+
+    // Edit policy: Default Deny (<= 0), wrong author, expired window, valid window
+    expect(() =>
+      assertTaskCommentCanBeEditedByAuthor({
+        comment: editableComment,
+        actorUserId: USER_1,
+        commentEditWindowMinutes: 0,
+        now: T0,
+      }),
+    ).toThrow(AuthorizationError);
+
+    expect(() =>
+      assertTaskCommentCanBeEditedByAuthor({
+        comment: editableComment,
+        actorUserId: USER_2,
+        commentEditWindowMinutes: 30,
+        now: T0,
+      }),
+    ).toThrow(AuthorizationError);
+
+    expect(() =>
+      assertTaskCommentCanBeEditedByAuthor({
+        comment: editableComment,
+        actorUserId: USER_1,
+        commentEditWindowMinutes: 30,
+        now: T1, // 60 minutes elapsed > 30 minutes
+      }),
+    ).toThrow(AuthorizationError);
+
+    expect(() =>
+      assertTaskCommentCanBeEditedByAuthor({
+        comment: editableComment,
+        actorUserId: USER_1,
+        commentEditWindowMinutes: 60,
+        now: T1,
+      }),
+    ).not.toThrow();
+
+    // Delete policy: author or moderator allowed, non-author non-moderator denied, system protected
+    expect(() =>
+      assertTaskCommentCanBeDeletedByActor({
+        comment: editableComment,
+        actorUserId: USER_2,
+        canModerateComments: false,
+      }),
+    ).toThrow(AuthorizationError);
+
+    expect(() =>
+      assertTaskCommentCanBeDeletedByActor({
+        comment: editableComment,
+        actorUserId: USER_2,
+        canModerateComments: true,
+      }),
+    ).not.toThrow();
+
+    expect(() =>
+      assertTaskCommentCanBeDeletedByActor({
+        comment: systemComment,
+        actorUserId: USER_1,
+        canModerateComments: true,
+      }),
+    ).toThrow(ConflictError);
+
+    expect(normalizeTagName('  Urgente  ')).toBe('urgente');
   });
 
   it('computes effective duration (total - pauses), rejects invalid/overlapping pauses and creates new cycle on reopen', () => {

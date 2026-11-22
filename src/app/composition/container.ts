@@ -9,10 +9,13 @@ import {
   InMemoryEphemeralSessionPointer,
 } from '@/modules/authentication/infrastructure/session/ephemeral-session-pointer';
 import { AuthorizationManagementService } from '@/modules/authorization';
+import { DependencyService } from '@/modules/dependencies';
+import { ImpedimentService } from '@/modules/impediments';
 import { InvitationService } from '@/modules/invitations';
 import { KanbanService } from '@/modules/kanban';
 import { OrganizationService } from '@/modules/organizations';
 import { ProjectService } from '@/modules/projects';
+import { TaskService } from '@/modules/tasks';
 import { TeamService } from '@/modules/teams';
 import { UserService } from '@/modules/users';
 import { env as defaultEnv, type AppEnv } from '@/shared/config';
@@ -49,6 +52,11 @@ import {
   createProjectTeamLookupAdapter,
 } from './project-ports-adapter';
 import { createRepositoriesRegistry, type AppRepositoriesRegistry } from './repositories-registry';
+import {
+  createDependencyWorkContextAdapter,
+  createImpedimentWorkContextAdapter,
+  createTaskProjectContextAdapter,
+} from './task-ports-adapter';
 
 export interface AppServicesRegistry {
   readonly auth: AuthService;
@@ -58,6 +66,9 @@ export interface AppServicesRegistry {
   readonly teams: TeamService;
   readonly projects: ProjectService;
   readonly kanban: KanbanService;
+  readonly tasks: TaskService;
+  readonly dependencies: DependencyService;
+  readonly impediments: ImpedimentService;
   readonly authorization: AuthorizationManagementService;
 }
 
@@ -252,6 +263,59 @@ export function createAppContainer(
         impediments: resolvedRepositories.impediments.impediments,
         taskPauses: resolvedRepositories.tasks.taskPauses,
         taskExecutionCycles: resolvedRepositories.tasks.taskExecutionCycles,
+        organizationMembers: resolvedRepositories.organizations.organizationMembers,
+        organizationSettings: resolvedRepositories.settings.organizationSettings,
+        permissionGrants: resolvedRepositories.authorization.permissionGrants,
+        explicitDenyRules: resolvedRepositories.authorization.explicitDenyRules,
+        auditEvents: resolvedRepositories.audit.auditEvents,
+        transactionPort: resolvedTransactionPort,
+        eventBus: resolvedEventBus,
+        logger: resolvedLogger,
+        ...(options.now !== undefined ? { now: options.now } : {}),
+        ...(options.generateUuid !== undefined ? { generateUuid: options.generateUuid } : {}),
+      }),
+      tasks: new TaskService({
+        tasks: resolvedRepositories.tasks.tasks,
+        taskParticipants: resolvedRepositories.tasks.taskParticipants,
+        subtasks: resolvedRepositories.tasks.subtasks,
+        taskPauses: resolvedRepositories.tasks.taskPauses,
+        taskExecutionCycles: resolvedRepositories.tasks.taskExecutionCycles,
+        taskComments: resolvedRepositories.tasks.taskComments,
+        taskAttachments: resolvedRepositories.tasks.taskAttachments,
+        tags: resolvedRepositories.tasks.tags,
+        taskDeadlineHistory: resolvedRepositories.tasks.taskDeadlineHistory,
+        taskDependencies: resolvedRepositories.dependencies.taskDependencies,
+        impediments: resolvedRepositories.impediments.impediments,
+        attachmentBlobStore: resolvedAttachmentBlobStore,
+        projectContext: createTaskProjectContextAdapter(resolvedRepositories),
+        organizationMembers: resolvedRepositories.organizations.organizationMembers,
+        organizationSettings: resolvedRepositories.settings.organizationSettings,
+        permissionGrants: resolvedRepositories.authorization.permissionGrants,
+        explicitDenyRules: resolvedRepositories.authorization.explicitDenyRules,
+        auditEvents: resolvedRepositories.audit.auditEvents,
+        transactionPort: resolvedTransactionPort,
+        eventBus: resolvedEventBus,
+        logger: resolvedLogger,
+        ...(options.now !== undefined ? { now: options.now } : {}),
+        ...(options.generateUuid !== undefined ? { generateUuid: options.generateUuid } : {}),
+      }),
+      dependencies: new DependencyService({
+        taskDependencies: resolvedRepositories.dependencies.taskDependencies,
+        workContext: createDependencyWorkContextAdapter(resolvedRepositories),
+        organizationMembers: resolvedRepositories.organizations.organizationMembers,
+        organizationSettings: resolvedRepositories.settings.organizationSettings,
+        permissionGrants: resolvedRepositories.authorization.permissionGrants,
+        explicitDenyRules: resolvedRepositories.authorization.explicitDenyRules,
+        auditEvents: resolvedRepositories.audit.auditEvents,
+        transactionPort: resolvedTransactionPort,
+        eventBus: resolvedEventBus,
+        logger: resolvedLogger,
+        ...(options.now !== undefined ? { now: options.now } : {}),
+        ...(options.generateUuid !== undefined ? { generateUuid: options.generateUuid } : {}),
+      }),
+      impediments: new ImpedimentService({
+        impediments: resolvedRepositories.impediments.impediments,
+        workContext: createImpedimentWorkContextAdapter(resolvedRepositories),
         organizationMembers: resolvedRepositories.organizations.organizationMembers,
         organizationSettings: resolvedRepositories.settings.organizationSettings,
         permissionGrants: resolvedRepositories.authorization.permissionGrants,

@@ -36,7 +36,7 @@ import {
   type ProjectMember,
 } from '@/modules/projects';
 import { createDefaultOrganizationSettings } from '@/modules/settings';
-import type { Task } from '@/modules/tasks';
+import { asTaskExecutionCycleId, type Task, type TaskExecutionCycle } from '@/modules/tasks';
 import { asTeamMemberId, type Team, type TeamMember } from '@/modules/teams';
 import type { User } from '@/modules/users';
 import {
@@ -347,6 +347,7 @@ export async function ensureDemoOrganizationSeeded(
       TRANSACTION_RESOURCES.PROJECT_BOARDS,
       TRANSACTION_RESOURCES.BOARD_COLUMNS,
       TRANSACTION_RESOURCES.TASKS,
+      TRANSACTION_RESOURCES.TASK_EXECUTION_CYCLES,
       TRANSACTION_RESOURCES.FEEDBACK_CATEGORIES,
       TRANSACTION_RESOURCES.FEEDBACK_CATEGORY_VERSIONS,
       TRANSACTION_RESOURCES.FEEDBACK_CONTEST_REASONS,
@@ -631,6 +632,29 @@ export async function ensureDemoOrganizationSeeded(
       ];
       for (const task of demoTasks) {
         await deps.repositories.tasks.tasks.save(task);
+      }
+
+      const demoExecutionCycles: readonly TaskExecutionCycle[] = [
+        {
+          id: asTaskExecutionCycleId('11111111-1111-4111-8111-111111111811'),
+          organizationId: DEMO_ORG_ID,
+          projectId: DEMO_PROJECT_ID,
+          taskId: DEMO_TASK_IDS.FOUNDATION_TASK,
+          cycleNumber: 1,
+          startedAt: now,
+          effectiveStartedAt: now,
+        },
+        {
+          id: asTaskExecutionCycleId('11111111-1111-4111-8111-111111111812'),
+          organizationId: DEMO_ORG_ID,
+          projectId: DEMO_PROJECT_ID,
+          taskId: DEMO_TASK_IDS.KANBAN_FLOW_TASK,
+          cycleNumber: 1,
+          startedAt: now,
+        },
+      ];
+      for (const cycle of demoExecutionCycles) {
+        await deps.repositories.tasks.taskExecutionCycles.save(cycle);
       }
 
       const catalog = buildDeterministicFeedbackCatalog(now);

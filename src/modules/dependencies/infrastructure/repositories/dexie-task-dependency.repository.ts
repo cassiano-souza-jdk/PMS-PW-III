@@ -35,6 +35,20 @@ export class DexieTaskDependencyRepository implements TaskDependencyRepositoryPo
     return findOrganizationScopedById(this.table, organizationId, dependencyId, 'TaskDependency');
   }
 
+  async findByPair(
+    organizationId: OrganizationId,
+    taskId: TaskId,
+    dependsOnTaskId: TaskId,
+  ): Promise<TaskDependency | null> {
+    return withPersistenceErrorHandling('TaskDependency.findByPair', async () => {
+      const record = await this.table
+        .where('[organizationId+taskId+dependsOnTaskId]')
+        .equals([organizationId, taskId, dependsOnTaskId])
+        .first();
+      return record ?? null;
+    });
+  }
+
   async listByProject(
     organizationId: OrganizationId,
     projectId: ProjectId,

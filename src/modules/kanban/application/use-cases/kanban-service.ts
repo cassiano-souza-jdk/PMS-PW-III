@@ -30,6 +30,7 @@ import {
 } from '@/modules/projects';
 import {
   createDefaultOrganizationSettings,
+  toAuthorizationPolicyConfig,
   type OrganizationSettingsRepositoryPort,
 } from '@/modules/settings';
 import {
@@ -370,11 +371,14 @@ export class KanbanService {
       this.deps.organizationSettings.findByOrganization(validatedOrgId),
     ]);
 
+    const effectiveSettings = settings ?? createDefaultOrganizationSettings(validatedOrgId, now);
+    const policyConfig = toAuthorizationPolicyConfig(effectiveSettings);
+
     assertAuthorized({
       actor,
       action: PERMISSION_CODES.BOARD_VIEW,
       resource: buildBoardResource(validatedOrgId, validatedProjectId, validatedProjectId, project),
-      context: { now },
+      context: { now, policyConfig },
     });
 
     if (!project) {
@@ -457,7 +461,7 @@ export class KanbanService {
         actor,
         action: PERMISSION_CODES.TASK_VIEW,
         resource: taskResource,
-        context: { now },
+        context: { now, policyConfig },
       });
 
       if (!viewDecision.allowed) {
@@ -470,27 +474,27 @@ export class KanbanService {
           actor,
           action: PERMISSION_CODES.BOARD_CARD_MOVE,
           resource: taskResource,
-          context: { now },
+          context: { now, policyConfig },
         }).allowed &&
         evaluateAuthorization({
           actor,
           action: PERMISSION_CODES.TASK_MOVE,
           resource: taskResource,
-          context: { now },
+          context: { now, policyConfig },
         }).allowed;
 
       const canComplete = evaluateAuthorization({
         actor,
         action: PERMISSION_CODES.TASK_COMPLETE,
         resource: taskResource,
-        context: { now },
+        context: { now, policyConfig },
       }).allowed;
 
       const canReopen = evaluateAuthorization({
         actor,
         action: PERMISSION_CODES.TASK_REOPEN,
         resource: taskResource,
-        context: { now },
+        context: { now, policyConfig },
       }).allowed;
 
       cards.push({
@@ -503,14 +507,13 @@ export class KanbanService {
       });
     }
 
-    const effectiveSettings = settings ?? createDefaultOrganizationSettings(validatedOrgId, now);
     const boardResource = buildBoardResource(validatedOrgId, validatedProjectId, board.id, project);
 
     const canManageWip = evaluateAuthorization({
       actor,
       action: PERMISSION_CODES.BOARD_WIP_MANAGE,
       resource: boardResource,
-      context: { now },
+      context: { now, policyConfig },
     }).allowed;
 
     const permissions: KanbanBoardPermissions = Object.freeze({
@@ -518,13 +521,13 @@ export class KanbanService {
         actor,
         action: PERMISSION_CODES.BOARD_CONFIGURE,
         resource: boardResource,
-        context: { now },
+        context: { now, policyConfig },
       }).allowed,
       canManageColumns: evaluateAuthorization({
         actor,
         action: PERMISSION_CODES.BOARD_COLUMNS_MANAGE,
         resource: boardResource,
-        context: { now },
+        context: { now, policyConfig },
       }).allowed,
       canManageWip,
       canCreateQuickCard: evaluateAuthorization({
@@ -543,10 +546,7 @@ export class KanbanService {
         },
         context: {
           now,
-          policyConfig: {
-            allowMemberCreateTaskInProject:
-              effectiveSettings.pendingPermissionDefaults.allowMemberCreateTaskWithoutGrant,
-          },
+          policyConfig,
         },
       }).allowed,
       canMoveWithWipOverride: canManageWip,
@@ -1874,6 +1874,7 @@ export class KanbanService {
     ]);
 
     const effectiveSettings = settings ?? createDefaultOrganizationSettings(validatedOrgId, now);
+    const policyConfig = toAuthorizationPolicyConfig(effectiveSettings);
 
     assertAuthorized({
       actor,
@@ -1891,12 +1892,34 @@ export class KanbanService {
       },
       context: {
         now,
-        policyConfig: {
-          allowMemberCreateTaskInProject:
-            effectiveSettings.pendingPermissionDefaults.allowMemberCreateTaskWithoutGrant,
-        },
+        policyConfig,
       },
     });
+
+    const validatedAssigneeId =
+      parsed.assigneeId !== undefined ? asUserId(parsed.assigneeId, 'assigneeId') : undefined;
+    if (validatedAssigneeId !== undefined && validatedAssigneeId !== validatedActorId) {
+      assertAuthorized({
+        actor,
+        action: PERMISSION_CODES.TASK_ASSIGN,
+        resource: {
+          kind: 'TASK',
+          exists: project !== null,
+          organizationId: validatedOrgId,
+          projectId: validatedProjectId,
+          teamId: project?.teamId,
+          ownerUserId: project?.ownerUserId,
+          assigneeId: validatedAssigneeId,
+          deletedAt: project?.deletedAt,
+          archivedAt: project?.archivedAt,
+          projectArchivedAt: project?.archivedAt,
+        },
+        context: {
+          now,
+          policyConfig,
+        },
+      });
+    }
 
     if (!project) {
       throw new NotFoundError(`Project "${validatedProjectId}" was not found.`);
@@ -1951,8 +1974,6 @@ export class KanbanService {
       );
     }
 
-    const validatedAssigneeId =
-      parsed.assigneeId !== undefined ? asUserId(parsed.assigneeId, 'assigneeId') : undefined;
     if (validatedAssigneeId !== undefined) {
       const assigneeProjectMember = await this.deps.projectMembers.findByProjectAndUser(
         validatedOrgId,

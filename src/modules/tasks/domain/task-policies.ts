@@ -6,6 +6,7 @@ import {
   type ImpedimentId,
   type IsoDateTime,
   type TaskId,
+  type UserId,
 } from '@/shared/kernel';
 import {
   SUBTASK_STATUSES,
@@ -138,6 +139,85 @@ export function assertTaskCommentEditable(comment: TaskComment): void {
       details: { commentId: comment.id },
     });
   }
+}
+
+export interface TaskCommentEditPolicyInput {
+  readonly comment: TaskComment;
+  readonly actorUserId: UserId;
+  readonly commentEditWindowMinutes: number;
+  readonly now: IsoDateTime;
+}
+
+/**
+ * Enforces comment edit policy (ADR-0011 §8, permission-matrix.md §5.5 & §12):
+ * - system and soft-deleted comments are immutable (ConflictError);
+ * - strict authorship required (AuthorizationError);
+ * - commentEditWindowMinutes <= 0 enforces Default Deny (AuthorizationError);
+ * - elapsed time > commentEditWindowMinutes * 60_000 denies edit (AuthorizationError).
+ */
+export function assertTaskCommentCanBeEditedByAuthor(input: TaskCommentEditPolicyInput): void {
+  assertTaskCommentEditable(input.comment);
+
+  if (input.comment.authorUserId !== input.actorUserId) {
+    throw new AuthorizationError('Only the comment author can edit a task comment.', {
+      details: { commentId: input.comment.id },
+    });
+  }
+
+  if (!Number.isFinite(input.commentEditWindowMinutes) || input.commentEditWindowMinutes <= 0) {
+    throw new AuthorizationError(
+      'Comment editing is disabled by organization policy (commentEditWindowMinutes <= 0).',
+      {
+        details: {
+          commentId: input.comment.id,
+          reasonCode: 'DENIED_POLICY_DEFAULT_DENY',
+        },
+      },
+    );
+  }
+
+  const createdAtMs = parseIsoDateTimeMs(input.comment.createdAt);
+  const nowMs = parseIsoDateTimeMs(input.now);
+  const elapsedMs = nowMs - createdAtMs;
+  const maxWindowMs = input.commentEditWindowMinutes * 60_000;
+
+  if (elapsedMs < 0 || elapsedMs > maxWindowMs) {
+    throw new AuthorizationError('Task comment edit window has expired.', {
+      details: {
+        commentId: input.comment.id,
+        commentEditWindowMinutes: input.commentEditWindowMinutes,
+        reasonCode: 'COMMENT_EDIT_WINDOW_EXPIRED',
+      },
+    });
+  }
+}
+
+export interface TaskCommentDeletePolicyInput {
+  readonly comment: TaskComment;
+  readonly actorUserId: UserId;
+  readonly canModerateComments: boolean;
+}
+
+/**
+ * Enforces comment logical deletion policy (ADR-0011 §8):
+ * - system and already deleted comments are immutable (ConflictError);
+ * - requires strict authorship OR project/org administrative authority (ADMIN / managing MANAGER).
+ */
+export function assertTaskCommentCanBeDeletedByActor(input: TaskCommentDeletePolicyInput): void {
+  assertTaskCommentEditable(input.comment);
+
+  if (input.comment.authorUserId !== input.actorUserId && !input.canModerateComments) {
+    throw new AuthorizationError(
+      'Only the comment author or an authorized project manager/admin can delete this comment.',
+      {
+        details: { commentId: input.comment.id },
+      },
+    );
+  }
+}
+
+export function normalizeTagName(name: string): string {
+  return name.trim().toLowerCase();
 }
 
 /**
