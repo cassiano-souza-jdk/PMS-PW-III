@@ -331,20 +331,36 @@ export function ProjectsPage() {
   const canManageSelectedProjectMembers =
     selectedProjectResource !== undefined &&
     can(PERMISSION_CODES.PROJECT_MEMBERS_MANAGE, selectedProjectResource);
-  const canOpenSelectedProjectBoard =
-    selectedProjectSummary !== null &&
+  const canViewProjectBoard = (
+    project: Pick<
+      ProjectListItem,
+      'id' | 'organizationId' | 'teamId' | 'ownerUserId' | 'deletedAt' | 'archivedAt'
+    >,
+  ): boolean =>
     can(PERMISSION_CODES.BOARD_VIEW, {
       kind: 'BOARD',
-      id: asEntityId(selectedProjectSummary.id),
+      id: asEntityId(project.id),
       exists: true,
-      organizationId: selectedProjectSummary.organizationId,
-      projectId: selectedProjectSummary.id,
-      teamId: selectedProjectSummary.teamId,
-      ownerUserId: selectedProjectSummary.ownerUserId,
-      deletedAt: selectedProjectSummary.deletedAt,
-      archivedAt: selectedProjectSummary.archivedAt,
-      projectArchivedAt: selectedProjectSummary.archivedAt,
+      organizationId: project.organizationId,
+      projectId: project.id,
+      teamId: project.teamId,
+      ownerUserId: project.ownerUserId,
+      deletedAt: project.deletedAt,
+      archivedAt: project.archivedAt,
+      projectArchivedAt: project.archivedAt,
     });
+
+  const canOpenSelectedProjectBoard =
+    selectedProjectSummary !== null && canViewProjectBoard(selectedProjectSummary);
+
+  const canOpenBoardByProjectId: Record<string, boolean> = {};
+  for (const project of projects) {
+    const targetProject =
+      selectedProjectSummary !== null && selectedProjectSummary.id === project.id
+        ? selectedProjectSummary
+        : project;
+    canOpenBoardByProjectId[project.id] = canViewProjectBoard(targetProject);
+  }
 
   const canUnlinkTeam =
     selectedProjectResource !== undefined &&
@@ -698,6 +714,7 @@ export function ProjectsPage() {
       canDeleteSelectedProject={canDeleteSelectedProject}
       canManageSelectedProjectMembers={canManageSelectedProjectMembers}
       canOpenSelectedProjectBoard={canOpenSelectedProjectBoard}
+      canOpenBoardByProjectId={canOpenBoardByProjectId}
       feedback={feedback}
       onToggleIncludeArchived={setIncludeArchived}
       onSelectProject={setSelectedProjectId}
