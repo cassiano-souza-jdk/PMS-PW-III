@@ -44,6 +44,8 @@ export interface PendingPermissionDefaults {
   readonly allowMemberChangePriorityOrDueDateWithoutGrant: boolean;
   readonly allowFieldLevelTemporaryGrants: boolean;
   readonly allowManagerViewIndividualProductivity: boolean;
+  readonly allowMemberManageSubtasksInAccessibleTask?: boolean;
+  readonly allowMemberResolveOthersImpediment?: boolean;
   readonly trashRetentionDays: number | null;
   readonly requireReinforcedConfirmationForIrreversibleActions: boolean;
   readonly allowMemberTrashAccess: boolean;
@@ -129,6 +131,8 @@ export function createDefaultOrganizationSettings(
       allowMemberChangePriorityOrDueDateWithoutGrant: false,
       allowFieldLevelTemporaryGrants: false,
       allowManagerViewIndividualProductivity: false,
+      allowMemberManageSubtasksInAccessibleTask: false,
+      allowMemberResolveOthersImpediment: false,
       trashRetentionDays: null,
       requireReinforcedConfirmationForIrreversibleActions: true,
       allowMemberTrashAccess: false,

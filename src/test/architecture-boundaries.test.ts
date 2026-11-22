@@ -226,6 +226,81 @@ describe(
       ).toHaveLength(1);
     });
 
+    it('blocks acyclic DAG violations across tasks, projects, dependencies and impediments (ADR-0010 §3.4 & ADR-0011 §3)', async () => {
+      const tasksViolations = await lintSnippet(
+        [
+          "import { PROJECT_STATUSES } from '@/modules/projects';",
+          "import { BOARD_COLUMN_ROLES } from '@/modules/kanban';",
+          'export const forbiddenTasksImports = [PROJECT_STATUSES, BOARD_COLUMN_ROLES];',
+        ].join('\n'),
+        'src/modules/tasks/application/violation-dag.ts',
+      );
+      const projectsViolations = await lintSnippet(
+        [
+          "import { TeamService } from '@/modules/teams';",
+          "import { BOARD_COLUMN_ROLES } from '@/modules/kanban';",
+          'export const forbiddenProjectsImports = [TeamService, BOARD_COLUMN_ROLES];',
+        ].join('\n'),
+        'src/modules/projects/application/violation-dag.ts',
+      );
+      const dependenciesViolations = await lintSnippet(
+        [
+          "import { SUBTASK_STATUSES } from '@/modules/tasks';",
+          "import { PROJECT_STATUSES } from '@/modules/projects';",
+          "import { BOARD_COLUMN_ROLES } from '@/modules/kanban';",
+          'export const forbiddenDependencyImports = [SUBTASK_STATUSES, PROJECT_STATUSES, BOARD_COLUMN_ROLES];',
+        ].join('\n'),
+        'src/modules/dependencies/application/violation-dag.ts',
+      );
+      const impedimentsViolations = await lintSnippet(
+        [
+          "import { SUBTASK_STATUSES } from '@/modules/tasks';",
+          "import { PROJECT_STATUSES } from '@/modules/projects';",
+          "import { BOARD_COLUMN_ROLES } from '@/modules/kanban';",
+          'export const forbiddenImpedimentImports = [SUBTASK_STATUSES, PROJECT_STATUSES, BOARD_COLUMN_ROLES];',
+        ].join('\n'),
+        'src/modules/impediments/application/violation-dag.ts',
+      );
+
+      expect(
+        tasksViolations.filter(
+          (msg) => msg.ruleId === 'boundaries/dependencies' && msg.severity === 2,
+        ),
+      ).toHaveLength(2);
+      expect(
+        projectsViolations.filter(
+          (msg) => msg.ruleId === 'boundaries/dependencies' && msg.severity === 2,
+        ),
+      ).toHaveLength(2);
+      expect(
+        dependenciesViolations.filter(
+          (msg) => msg.ruleId === 'boundaries/dependencies' && msg.severity === 2,
+        ),
+      ).toHaveLength(3);
+      expect(
+        impedimentsViolations.filter(
+          (msg) => msg.ruleId === 'boundaries/dependencies' && msg.severity === 2,
+        ),
+      ).toHaveLength(3);
+    });
+
+    it('allows legitimate DAG dependencies (tasks -> dependencies/impediments) and preserves test files', async () => {
+      const validTasksAppMessages = await lintSnippet(
+        [
+          "import { assertNoDependencyCycle } from '@/modules/dependencies';",
+          "import { IMPEDIMENT_CATEGORIES } from '@/modules/impediments';",
+          'export const validTasksImports = [assertNoDependencyCycle, IMPEDIMENT_CATEGORIES];',
+        ].join('\n'),
+        'src/modules/tasks/application/valid-dag.ts',
+      );
+      const [coreInvariantsResult] = await eslint.lintFiles([
+        path.resolve(WORKSPACE_ROOT, 'src/modules/tasks/domain/core-work-invariants.test.ts'),
+      ]);
+
+      expect(validTasksAppMessages.filter((msg) => msg.severity === 2)).toEqual([]);
+      expect(coreInvariantsResult?.messages.filter((msg) => msg.severity === 2)).toEqual([]);
+    });
+
     it('blocks circular dependencies between real files (import-x/no-cycle)', async () => {
       const [result] = await eslint.lintFiles([path.join(TMP_ALPHA_DIR, 'domain', 'cycle-a.ts')]);
       if (!result) {

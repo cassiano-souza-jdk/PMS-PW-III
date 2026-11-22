@@ -1000,6 +1000,14 @@ const PERMISSION_RULE_EVALUATORS: Readonly<Record<PermissionCode, ActionRuleEval
         return allowByGrant(ctx, ctx.matchedGrant);
       }
 
+      if (
+        ctx.participatesInProject &&
+        ctx.isTaskActor &&
+        ctx.policyConfig.allowMemberManageSubtasksInAccessibleTask
+      ) {
+        return allowByRole(ctx);
+      }
+
       return deny('DENIED_OUT_OF_SCOPE', APP_ERROR_CODES.AUTHORIZATION_ERROR, ctx.requiresAudit);
     }
 
@@ -1082,6 +1090,14 @@ const PERMISSION_RULE_EVALUATORS: Readonly<Record<PermissionCode, ActionRuleEval
 
     if (ctx.role === ORGANIZATION_ROLES.MANAGER) {
       if (ctx.managesProject) {
+        return allowByRole(ctx);
+      }
+
+      if (
+        ctx.participatesInProject &&
+        ctx.isTaskActor &&
+        (ctx.isResourceCreator || ctx.policyConfig.allowMemberResolveOthersImpediment)
+      ) {
         return allowByRole(ctx);
       }
 
