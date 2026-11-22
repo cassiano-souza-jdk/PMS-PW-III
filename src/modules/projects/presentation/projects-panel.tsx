@@ -7,11 +7,13 @@ import {
   IconDownload,
   IconFolderPlus,
   IconLayoutKanban,
+  IconListCheck,
   IconTrash,
 } from '@tabler/icons-react';
 import { useState } from 'react';
 import { useForm } from 'react-hook-form';
 import { useIntl } from 'react-intl';
+import { Link } from 'react-router';
 import { z } from 'zod';
 import type { OrganizationMemberDetails } from '@/modules/organizations';
 import type { MessageId } from '@/shared/i18n';
@@ -123,6 +125,7 @@ export interface ProjectsPanelProps {
   readonly canDeleteSelectedProject: boolean;
   readonly canManageSelectedProjectMembers: boolean;
   readonly canOpenSelectedProjectBoard: boolean;
+  readonly canOpenBoardByProjectId: Readonly<Record<string, boolean>>;
   readonly feedback?: ProjectPanelFeedback | null;
   readonly onToggleIncludeArchived: (next: boolean) => void;
   readonly onSelectProject: (projectId: ProjectId) => void;
@@ -346,14 +349,23 @@ function SelectedProjectDetailsView({
 
           <div className="flex flex-wrap items-center gap-2">
             {canOpenSelectedProjectBoard ? (
-              <Button
-                type="button"
-                className="min-h-[44px]"
-                onClick={() => onOpenBoard(project.id)}
-              >
-                <IconLayoutKanban className="h-4 w-4" aria-hidden="true" />
-                <span>{intl.formatMessage({ id: 'projects.openBoardAction' })}</span>
-              </Button>
+              <>
+                <Button
+                  type="button"
+                  className="min-h-[44px]"
+                  onClick={() => onOpenBoard(project.id)}
+                >
+                  <IconLayoutKanban className="h-4 w-4" aria-hidden="true" />
+                  <span>{intl.formatMessage({ id: 'projects.openBoardAction' })}</span>
+                </Button>
+
+                <Button asChild variant="outline" className="min-h-[44px]">
+                  <Link to={`/projects/${project.id}/tasks`}>
+                    <IconListCheck className="h-4 w-4" aria-hidden="true" />
+                    <span>{intl.formatMessage({ id: 'projects.openTasksAction' })}</span>
+                  </Link>
+                </Button>
+              </>
             ) : null}
 
             <Button
@@ -700,6 +712,7 @@ export function ProjectsPanel({
   canDeleteSelectedProject,
   canManageSelectedProjectMembers,
   canOpenSelectedProjectBoard,
+  canOpenBoardByProjectId,
   feedback = null,
   onToggleIncludeArchived,
   onSelectProject,
@@ -830,6 +843,7 @@ export function ProjectsPanel({
                 const isSelected = project.id === selectedProjectId;
                 const isArchived =
                   project.archivedAt !== undefined || project.status === 'ARCHIVED';
+                const canOpenProjectBoard = canOpenBoardByProjectId[project.id] ?? false;
 
                 return (
                   <li
@@ -885,15 +899,17 @@ export function ProjectsPanel({
                         </div>
                       </button>
 
-                      <Button
-                        type="button"
-                        variant="outline"
-                        className="min-h-[44px] w-full"
-                        onClick={() => onOpenBoard(project.id)}
-                      >
-                        <IconLayoutKanban className="h-4 w-4" aria-hidden="true" />
-                        <span>{intl.formatMessage({ id: 'projects.openBoardAction' })}</span>
-                      </Button>
+                      {canOpenProjectBoard ? (
+                        <Button
+                          type="button"
+                          variant="outline"
+                          className="min-h-[44px] w-full"
+                          onClick={() => onOpenBoard(project.id)}
+                        >
+                          <IconLayoutKanban className="h-4 w-4" aria-hidden="true" />
+                          <span>{intl.formatMessage({ id: 'projects.openBoardAction' })}</span>
+                        </Button>
+                      ) : null}
                     </div>
                   </li>
                 );

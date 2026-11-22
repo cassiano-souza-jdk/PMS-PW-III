@@ -5,9 +5,11 @@ import {
   IconArrowLeft,
   IconArrowRight,
   IconArrowUp,
+  IconChevronRight,
   IconGripVertical,
 } from '@tabler/icons-react';
 import { useIntl } from 'react-intl';
+import { Link } from 'react-router';
 import type { MessageId } from '@/shared/i18n';
 import type { BoardColumnId, Priority } from '@/shared/kernel';
 import { Badge, Button } from '@/shared/ui';
@@ -148,6 +150,25 @@ export function KanbanSortableCard({
               { date: formattedLastActivity },
             )}
           </p>
+        </div>
+
+        <div className="pt-1">
+          <Button
+            asChild
+            variant="ghost"
+            className="min-h-[44px] w-full justify-between px-2.5 text-xs"
+          >
+            <Link
+              to={`/projects/${card.task.projectId}/tasks/${card.task.id}`}
+              aria-label={intl.formatMessage(
+                { id: 'kanban.card.openDetailsAriaLabel' },
+                { title: card.task.title },
+              )}
+            >
+              <span>{intl.formatMessage({ id: 'kanban.card.openDetailsAction' })}</span>
+              <IconChevronRight className="h-4 w-4" aria-hidden="true" />
+            </Link>
+          </Button>
         </div>
 
         {card.canMove && !isProjectArchived && !isColumnArchived ? (

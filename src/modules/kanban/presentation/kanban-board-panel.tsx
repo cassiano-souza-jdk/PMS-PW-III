@@ -16,10 +16,11 @@ import {
   sortableKeyboardCoordinates,
 } from '@dnd-kit/sortable';
 import { zodResolver } from '@hookform/resolvers/zod';
-import { IconArrowLeft, IconColumns3, IconPlus } from '@tabler/icons-react';
-import { useState } from 'react';
+import { IconArrowLeft, IconColumns3, IconListCheck, IconPlus } from '@tabler/icons-react';
+import { useEffect, useRef, useState } from 'react';
 import { useForm } from 'react-hook-form';
 import { useIntl } from 'react-intl';
+import { Link } from 'react-router';
 import { z } from 'zod';
 import { APP_ERROR_CODES, isAppError } from '@/shared/errors';
 import type { MessageId } from '@/shared/i18n';
@@ -57,6 +58,45 @@ interface PendingMoveExceptionState {
   readonly targetOrder?: number;
   readonly accumulatedInput: Omit<MoveCardInput, 'targetColumnId' | 'targetOrder'>;
 }
+
+interface ExceptionDialogCopy {
+  readonly titleId: MessageId;
+  readonly descriptionId: MessageId;
+  readonly labelId: MessageId;
+  readonly placeholderId: MessageId;
+  readonly confirmActionId: MessageId;
+}
+
+const EXCEPTION_DIALOG_COPY: Readonly<Record<MoveExceptionKind, ExceptionDialogCopy>> = {
+  WIP_OVERRIDE: {
+    titleId: 'kanban.wipOverride.title',
+    descriptionId: 'kanban.wipOverride.description',
+    labelId: 'kanban.wipOverride.justificationLabel',
+    placeholderId: 'kanban.wipOverride.justificationPlaceholder',
+    confirmActionId: 'kanban.wipOverride.confirmAction',
+  },
+  PAUSED_OVERRIDE: {
+    titleId: 'kanban.pausedOverride.title',
+    descriptionId: 'kanban.pausedOverride.description',
+    labelId: 'kanban.pausedOverride.justificationLabel',
+    placeholderId: 'kanban.pausedOverride.justificationPlaceholder',
+    confirmActionId: 'kanban.wipOverride.confirmAction',
+  },
+  DEPENDENCY_OVERRIDE: {
+    titleId: 'kanban.dependencyOverride.title',
+    descriptionId: 'kanban.dependencyOverride.description',
+    labelId: 'kanban.dependencyOverride.justificationLabel',
+    placeholderId: 'kanban.dependencyOverride.justificationPlaceholder',
+    confirmActionId: 'kanban.wipOverride.confirmAction',
+  },
+  REOPEN_REASON: {
+    titleId: 'kanban.reopenReason.title',
+    descriptionId: 'kanban.reopenReason.description',
+    labelId: 'kanban.reopenReason.label',
+    placeholderId: 'kanban.reopenReason.placeholder',
+    confirmActionId: 'kanban.reopenReason.confirmAction',
+  },
+};
 
 const VALIDATION_ERROR_IDS: Readonly<Record<string, MessageId>> = {
   'validation.required': 'validation.required',
@@ -169,6 +209,38 @@ export function KanbanBoardPanel({
   const [pendingException, setPendingException] = useState<PendingMoveExceptionState | null>(null);
   const [exceptionJustification, setExceptionJustification] = useState('');
   const [exceptionValidationError, setExceptionValidationError] = useState<string | null>(null);
+  const exceptionInputRef = useRef<HTMLInputElement | null>(null);
+  const exceptionTriggerRef = useRef<HTMLElement | null>(null);
+
+  useEffect(() => {
+    if (pendingException !== null) {
+      exceptionInputRef.current?.focus();
+    }
+  }, [pendingException]);
+
+  const openPendingException = (next: PendingMoveExceptionState) => {
+    if (
+      pendingException === null &&
+      typeof document !== 'undefined' &&
+      document.activeElement instanceof HTMLElement
+    ) {
+      exceptionTriggerRef.current = document.activeElement;
+    }
+    setPendingException(next);
+    setExceptionJustification('');
+    setExceptionValidationError(null);
+  };
+
+  const closePendingException = (restoreFocus: boolean) => {
+    setPendingException(null);
+    setExceptionJustification('');
+    setExceptionValidationError(null);
+    const trigger = exceptionTriggerRef.current;
+    exceptionTriggerRef.current = null;
+    if (restoreFocus && trigger !== null && trigger.isConnected) {
+      trigger.focus();
+    }
+  };
 
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
@@ -234,9 +306,7 @@ export function KanbanBoardPanel({
         ...(targetOrder !== undefined ? { targetOrder } : {}),
         ...extraInput,
       });
-      setPendingException(null);
-      setExceptionJustification('');
-      setExceptionValidationError(null);
+      closePendingException(false);
       setAnnouncement(
         intl.formatMessage(
           { id: 'kanban.cardMovedAnnouncement' },
@@ -246,15 +316,13 @@ export function KanbanBoardPanel({
     } catch (error) {
       if (isWipConflictError(error)) {
         if (permissions.canMoveWithWipOverride) {
-          setPendingException({
+          openPendingException({
             kind: 'WIP_OVERRIDE',
             card,
             targetColumn,
             ...(targetOrder !== undefined ? { targetOrder } : {}),
             accumulatedInput: extraInput,
           });
-          setExceptionJustification('');
-          setExceptionValidationError(null);
         } else {
           const msg = intl.formatMessage({ id: 'kanban.wipOverride.noPermissionError' });
           setLocalError(msg);
@@ -264,28 +332,24 @@ export function KanbanBoardPanel({
       }
 
       if (isPausedConflictError(error)) {
-        setPendingException({
+        openPendingException({
           kind: 'PAUSED_OVERRIDE',
           card,
           targetColumn,
           ...(targetOrder !== undefined ? { targetOrder } : {}),
           accumulatedInput: extraInput,
         });
-        setExceptionJustification('');
-        setExceptionValidationError(null);
         return;
       }
 
       if (isDependencyConflictError(error)) {
-        setPendingException({
+        openPendingException({
           kind: 'DEPENDENCY_OVERRIDE',
           card,
           targetColumn,
           ...(targetOrder !== undefined ? { targetOrder } : {}),
           accumulatedInput: extraInput,
         });
-        setExceptionJustification('');
-        setExceptionValidationError(null);
         return;
       }
 
@@ -329,29 +393,25 @@ export function KanbanBoardPanel({
 
     if (card.isPaused) {
       setLocalError(null);
-      setPendingException({
+      openPendingException({
         kind: 'PAUSED_OVERRIDE',
         card,
         targetColumn,
         ...(targetOrder !== undefined ? { targetOrder } : {}),
         accumulatedInput: {},
       });
-      setExceptionJustification('');
-      setExceptionValidationError(null);
       return;
     }
 
     if (isLeavingFinalColumn) {
       setLocalError(null);
-      setPendingException({
+      openPendingException({
         kind: 'REOPEN_REASON',
         card,
         targetColumn,
         ...(targetOrder !== undefined ? { targetOrder } : {}),
         accumulatedInput: {},
       });
-      setExceptionJustification('');
-      setExceptionValidationError(null);
       return;
     }
 
@@ -370,15 +430,13 @@ export function KanbanBoardPanel({
       }
 
       setLocalError(null);
-      setPendingException({
+      openPendingException({
         kind: 'WIP_OVERRIDE',
         card,
         targetColumn,
         ...(targetOrder !== undefined ? { targetOrder } : {}),
         accumulatedInput: {},
       });
-      setExceptionJustification('');
-      setExceptionValidationError(null);
       return;
     }
 
@@ -413,20 +471,18 @@ export function KanbanBoardPanel({
       if (willExceedWipAfterReopen) {
         if (!permissions.canMoveWithWipOverride) {
           const msg = intl.formatMessage({ id: 'kanban.wipOverride.noPermissionError' });
-          setPendingException(null);
+          closePendingException(true);
           setLocalError(msg);
           setAnnouncement(msg);
           return;
         }
-        setPendingException({
+        openPendingException({
           kind: 'WIP_OVERRIDE',
           card,
           targetColumn,
           ...(targetOrder !== undefined ? { targetOrder } : {}),
           accumulatedInput: nextInput,
         });
-        setExceptionJustification('');
-        setExceptionValidationError(null);
         return;
       }
     }
@@ -605,19 +661,31 @@ export function KanbanBoardPanel({
     });
   };
 
+  const exceptionDialogCopy =
+    pendingException !== null ? EXCEPTION_DIALOG_COPY[pendingException.kind] : null;
+
   return (
     <section aria-labelledby="kanban-board-heading" className="mx-auto w-full max-w-7xl space-y-6">
       <div className="flex flex-wrap items-center justify-between gap-4">
         <div className="space-y-1">
-          <Button
-            type="button"
-            variant="outline"
-            className="min-h-[44px]"
-            onClick={onBackToProjects}
-          >
-            <IconArrowLeft className="h-4 w-4" aria-hidden="true" />
-            <span>{intl.formatMessage({ id: 'kanban.backToProjects' })}</span>
-          </Button>
+          <div className="flex flex-wrap items-center gap-2">
+            <Button
+              type="button"
+              variant="outline"
+              className="min-h-[44px]"
+              onClick={onBackToProjects}
+            >
+              <IconArrowLeft className="h-4 w-4" aria-hidden="true" />
+              <span>{intl.formatMessage({ id: 'kanban.backToProjects' })}</span>
+            </Button>
+
+            <Button asChild variant="outline" className="min-h-[44px]">
+              <Link to={`/projects/${project.id}/tasks`}>
+                <IconListCheck className="h-4 w-4" aria-hidden="true" />
+                <span>{intl.formatMessage({ id: 'kanban.openTaskListAction' })}</span>
+              </Link>
+            </Button>
+          </div>
           <h1
             id="kanban-board-heading"
             className="pt-2 text-2xl font-bold tracking-tight text-foreground sm:text-3xl"
@@ -676,47 +744,35 @@ export function KanbanBoardPanel({
         </Alert>
       ) : null}
 
-      {pendingException !== null ? (
+      {pendingException !== null && exceptionDialogCopy !== null ? (
         <Card
           role="dialog"
           aria-modal="false"
           aria-labelledby="move-exception-title"
+          aria-describedby="move-exception-description"
+          onKeyDown={(event) => {
+            if (event.key === 'Escape' && !isMutating) {
+              closePendingException(true);
+            }
+          }}
           className="border-amber-700/60 bg-amber-50/70 dark:border-amber-400/60 dark:bg-amber-950/30"
         >
           <CardHeader>
             <CardTitle id="move-exception-title">
-              {intl.formatMessage({
-                id:
-                  pendingException.kind === 'REOPEN_REASON'
-                    ? 'kanban.reopenReason.label'
-                    : 'kanban.wipOverride.title',
-              })}
+              {intl.formatMessage({ id: exceptionDialogCopy.titleId })}
             </CardTitle>
-            <CardDescription>
-              {intl.formatMessage({
-                id:
-                  pendingException.kind === 'WIP_OVERRIDE'
-                    ? 'kanban.wipOverride.description'
-                    : pendingException.kind === 'PAUSED_OVERRIDE'
-                      ? 'kanban.pausedOverride.error'
-                      : pendingException.kind === 'DEPENDENCY_OVERRIDE'
-                        ? 'kanban.dependencyOverride.error'
-                        : 'kanban.reopenReason.placeholder',
-              })}
+            <CardDescription id="move-exception-description">
+              {intl.formatMessage({ id: exceptionDialogCopy.descriptionId })}
             </CardDescription>
           </CardHeader>
 
           <CardContent className="space-y-4">
             <div className="space-y-1.5">
               <Label htmlFor="kanban-exception-justification" required>
-                {intl.formatMessage({
-                  id:
-                    pendingException.kind === 'REOPEN_REASON'
-                      ? 'kanban.reopenReason.label'
-                      : 'kanban.wipOverride.justificationLabel',
-                })}
+                {intl.formatMessage({ id: exceptionDialogCopy.labelId })}
               </Label>
               <Input
+                ref={exceptionInputRef}
                 id="kanban-exception-justification"
                 type="text"
                 value={exceptionJustification}
@@ -726,12 +782,7 @@ export function KanbanBoardPanel({
                     setExceptionValidationError(null);
                   }
                 }}
-                placeholder={intl.formatMessage({
-                  id:
-                    pendingException.kind === 'REOPEN_REASON'
-                      ? 'kanban.reopenReason.placeholder'
-                      : 'kanban.wipOverride.justificationPlaceholder',
-                })}
+                placeholder={intl.formatMessage({ id: exceptionDialogCopy.placeholderId })}
                 aria-invalid={exceptionValidationError !== null}
                 aria-describedby={
                   exceptionValidationError !== null
@@ -757,18 +808,14 @@ export function KanbanBoardPanel({
                 disabled={isMutating}
                 onClick={() => void handleConfirmException()}
               >
-                {intl.formatMessage({ id: 'kanban.wipOverride.confirmAction' })}
+                {intl.formatMessage({ id: exceptionDialogCopy.confirmActionId })}
               </Button>
               <Button
                 type="button"
                 variant="outline"
                 className="min-h-[44px]"
                 disabled={isMutating}
-                onClick={() => {
-                  setPendingException(null);
-                  setExceptionJustification('');
-                  setExceptionValidationError(null);
-                }}
+                onClick={() => closePendingException(true)}
               >
                 {intl.formatMessage({ id: 'kanban.wipOverride.cancelAction' })}
               </Button>

@@ -11,11 +11,15 @@ import {
   DEMO_MEMBER_USER_ID,
   DEMO_ORG_ID,
   DEMO_PROJECT_ID,
+  DEMO_TASK_IDS,
   createAppContainer,
   type AppCompositionContainer,
 } from '@/app/composition';
 import { InMemoryEphemeralSessionPointer } from '@/modules/authentication/infrastructure/session/ephemeral-session-pointer';
+import { PERMISSION_CODES, PERMISSION_SCOPE_TYPES } from '@/modules/authorization';
+import { PROJECT_MEMBER_ROLES } from '@/modules/projects';
 import { ptBRMessages } from '@/shared/i18n';
+import { asEntityId } from '@/shared/kernel';
 import { createLogger, createMemoryLogSink } from '@/shared/logging';
 import { PMS_DATABASE_NAME, ensureDatabaseOpen } from '@/shared/persistence';
 import { appRoutes } from './routes';
@@ -550,6 +554,288 @@ describe('Projects, Participants & Kanban Presentation + Routing + Accessibility
 
       // Garante que DEMO_MEMBER_USER_ID existe no escopo usado
       expect(DEMO_MEMBER_USER_ID).toBeDefined();
+    },
+  );
+
+  it(
+    'exibe cópia distinta para PAUSED_OVERRIDE e DEPENDENCY_OVERRIDE e renderiza links acessíveis de lista/detalhes fora da alça de arrasto com 0 violações vitest-axe',
+    { timeout: 25_000 },
+    async () => {
+      const user = userEvent.setup();
+      const appContainer = await createIsolatedContainer();
+      await appContainer.seedDemoOrganization();
+
+      // Pausa a tarefa existente e cria par com dependência obrigatória pendente
+      await appContainer.services.tasks.pauseTask(
+        DEMO_ADMIN_USER_ID,
+        DEMO_ORG_ID,
+        DEMO_TASK_IDS.FOUNDATION_TASK,
+        { reason: 'Aguardando definição de infraestrutura' },
+      );
+
+      const prereqTask = await appContainer.services.tasks.createTask(
+        DEMO_ADMIN_USER_ID,
+        DEMO_ORG_ID,
+        DEMO_PROJECT_ID,
+        {
+          title: 'Tarefa Pré-Requisito',
+          columnId: DEMO_COLUMN_IDS.TODO,
+        },
+      );
+      const dependentTask = await appContainer.services.tasks.createTask(
+        DEMO_ADMIN_USER_ID,
+        DEMO_ORG_ID,
+        DEMO_PROJECT_ID,
+        {
+          title: 'Tarefa Dependente Pendente',
+          columnId: DEMO_COLUMN_IDS.REVIEW,
+        },
+      );
+      await appContainer.services.dependencies.addDependency(
+        DEMO_ADMIN_USER_ID,
+        DEMO_ORG_ID,
+        dependentTask.id,
+        { dependsOnTaskId: prereqTask.id, required: true },
+      );
+
+      const { container } = await renderIsolatedApp('/demo', appContainer);
+      await screen.findByRole('heading', {
+        level: 1,
+        name: ptBRMessages['auth.demo.title'],
+      });
+      await user.click(screen.getByRole('button', { name: 'Entrar como Administrador' }));
+      await screen.findByRole('heading', {
+        level: 1,
+        name: ptBRMessages['organizations.title'],
+      });
+
+      const primaryNav = screen.getByRole('navigation', {
+        name: ptBRMessages['nav.primaryLabel'],
+      });
+      await user.click(
+        within(primaryNav).getByRole('link', { name: ptBRMessages['nav.projects'] }),
+      );
+      await screen.findByRole('button', { name: /Lancamento Plataforma PMS v1/ });
+
+      const projectsTasksLink = await screen.findByRole('link', {
+        name: ptBRMessages['projects.openTasksAction'],
+      });
+      expect(projectsTasksLink).toHaveAttribute('href', `/projects/${DEMO_PROJECT_ID}/tasks`);
+
+      const openBoardButtons = screen.getAllByRole('button', {
+        name: ptBRMessages['projects.openBoardAction'],
+      });
+      await user.click(openBoardButtons[0]!);
+
+      await screen.findByRole('heading', {
+        level: 1,
+        name: 'Quadro Kanban — Lancamento Plataforma PMS v1',
+      });
+
+      // Link de Lista de tarefas no cabeçalho do quadro Kanban
+      const boardTaskListLink = screen.getByRole('link', {
+        name: ptBRMessages['kanban.openTaskListAction'],
+      });
+      expect(boardTaskListLink).toHaveAttribute('href', `/projects/${DEMO_PROJECT_ID}/tasks`);
+
+      // Link de detalhes no cartão Kanban estritamente fora da alça de arrasto do @dnd-kit
+      const pausedTitle = 'Validar persistencia local Dexie e isolamento multi-organizacao';
+      const pausedArticle = screen
+        .getByRole('heading', { level: 3, name: pausedTitle })
+        .closest('article')!;
+      const dragHandle = within(pausedArticle).getByRole('button', { name: pausedTitle });
+      const detailsLink = within(pausedArticle).getByRole('link', {
+        name: `Abrir detalhes de ${pausedTitle}`,
+      });
+      expect(detailsLink).toHaveAttribute(
+        'href',
+        `/projects/${DEMO_PROJECT_ID}/tasks/${DEMO_TASK_IDS.FOUNDATION_TASK}`,
+      );
+      expect(dragHandle.contains(detailsLink)).toBe(false);
+      expect(detailsLink.closest('[aria-roledescription="sortable"]')).toBeNull();
+      expect(await axe(container)).toHaveNoViolations();
+
+      // 1. Dispara PAUSED_OVERRIDE e valida cópia distinta do diálogo (sem título de WIP)
+      const pausedSelect = within(pausedArticle).getByLabelText(
+        ptBRMessages['kanban.card.moveToColumnLabel'],
+      );
+      const reviewOption = Array.from((pausedSelect as HTMLSelectElement).options).find(
+        (opt) => opt.textContent === 'Em Revisao',
+      );
+      expect(reviewOption).toBeDefined();
+      await user.selectOptions(pausedSelect, reviewOption!.value);
+
+      const pausedHeading = await screen.findByRole('heading', {
+        name: ptBRMessages['kanban.pausedOverride.title'],
+      });
+      expect(pausedHeading).toBeInTheDocument();
+      expect(
+        screen.queryByRole('heading', { name: ptBRMessages['kanban.wipOverride.title'] }),
+      ).not.toBeInTheDocument();
+      expect(
+        screen.getByText(ptBRMessages['kanban.pausedOverride.description']),
+      ).toBeInTheDocument();
+      expect(
+        screen.getByLabelText(ptBRMessages['kanban.pausedOverride.justificationLabel'], {
+          exact: false,
+        }),
+      ).toHaveFocus();
+      expect(await axe(container)).toHaveNoViolations();
+
+      // Fecha diálogo de pausa com Escape e verifica retorno de foco para o controle disparador
+      await user.keyboard('{Escape}');
+      await waitFor(() => {
+        expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+      });
+      expect(pausedSelect).toHaveFocus();
+
+      // 2. Move cartão com dependência obrigatória pendente para "Concluido" -> DEPENDENCY_OVERRIDE
+      const dependentArticle = screen
+        .getByRole('heading', { level: 3, name: 'Tarefa Dependente Pendente' })
+        .closest('article')!;
+      const dependentSelect = within(dependentArticle).getByLabelText(
+        ptBRMessages['kanban.card.moveToColumnLabel'],
+      );
+      const doneOption = Array.from((dependentSelect as HTMLSelectElement).options).find(
+        (opt) => opt.textContent === 'Concluido',
+      );
+      expect(doneOption).toBeDefined();
+      await user.selectOptions(dependentSelect, doneOption!.value);
+
+      const dependencyHeading = await screen.findByRole('heading', {
+        name: ptBRMessages['kanban.dependencyOverride.title'],
+      });
+      expect(dependencyHeading).toBeInTheDocument();
+      expect(
+        screen.queryByRole('heading', { name: ptBRMessages['kanban.wipOverride.title'] }),
+      ).not.toBeInTheDocument();
+      expect(
+        screen.getByText(ptBRMessages['kanban.dependencyOverride.description']),
+      ).toBeInTheDocument();
+      expect(await axe(container)).toHaveNoViolations();
+
+      await user.type(
+        screen.getByLabelText(ptBRMessages['kanban.dependencyOverride.justificationLabel'], {
+          exact: false,
+        }),
+        'Dependência validada fora do fluxo principal',
+      );
+      await user.click(
+        screen.getByRole('button', { name: ptBRMessages['kanban.wipOverride.confirmAction'] }),
+      );
+
+      const doneSection = screen
+        .getByRole('heading', { level: 2, name: 'Concluido' })
+        .closest('section')!;
+      await within(doneSection).findByRole('heading', {
+        level: 3,
+        name: 'Tarefa Dependente Pendente',
+      });
+      expect(await axe(container)).toHaveNoViolations();
+    },
+  );
+
+  it(
+    'aplica simetria de BOARD_VIEW no botão "Abrir quadro Kanban" da lista e detalhe de projetos quando ExplicitDenyRule bloqueia o quadro (0 violações vitest-axe)',
+    { timeout: 25_000 },
+    async () => {
+      const user = userEvent.setup();
+      const appContainer = await createIsolatedContainer();
+      await appContainer.seedDemoOrganization();
+
+      // Cria segundo projeto onde MEMBER participa normalmente e bloqueia apenas BOARD_VIEW no projeto demo
+      const allowedProject = await appContainer.services.projects.createProject(
+        DEMO_ADMIN_USER_ID,
+        DEMO_ORG_ID,
+        {
+          name: 'Projeto Secundário Com Quadro',
+        },
+      );
+      await appContainer.services.projects.addProjectParticipant(
+        DEMO_ADMIN_USER_ID,
+        DEMO_ORG_ID,
+        allowedProject.id,
+        DEMO_MEMBER_USER_ID,
+        PROJECT_MEMBER_ROLES.PARTICIPANT,
+      );
+      await appContainer.services.authorization.createExplicitDenyRule(
+        DEMO_ADMIN_USER_ID,
+        DEMO_ORG_ID,
+        {
+          targetUserId: DEMO_MEMBER_USER_ID,
+          permission: PERMISSION_CODES.BOARD_VIEW,
+          scopeType: PERMISSION_SCOPE_TYPES.PROJECT,
+          scopeId: asEntityId(DEMO_PROJECT_ID),
+          reason: 'Teste de simetria BOARD_VIEW na lista lateral e detalhe',
+        },
+      );
+
+      const { container } = await renderIsolatedApp('/demo', appContainer);
+      await screen.findByRole('heading', {
+        level: 1,
+        name: ptBRMessages['auth.demo.title'],
+      });
+      await user.click(screen.getByRole('button', { name: 'Entrar como Membro' }));
+      await screen.findByRole('heading', {
+        level: 1,
+        name: ptBRMessages['organizations.title'],
+      });
+
+      const primaryNav = screen.getByRole('navigation', {
+        name: ptBRMessages['nav.primaryLabel'],
+      });
+      await user.click(
+        within(primaryNav).getByRole('link', { name: ptBRMessages['nav.projects'] }),
+      );
+
+      await screen.findByRole('button', { name: /Lancamento Plataforma PMS v1/ });
+      await screen.findByRole('button', { name: /Projeto Secundário Com Quadro/ });
+
+      const deniedListItem = screen
+        .getByRole('button', { name: /Lancamento Plataforma PMS v1/ })
+        .closest('li')!;
+      const allowedListItem = screen
+        .getByRole('button', { name: /Projeto Secundário Com Quadro/ })
+        .closest('li')!;
+
+      // Projeto com BOARD_VIEW negado NÃO exibe "Abrir quadro Kanban" na lista lateral nem no detalhe
+      expect(
+        within(deniedListItem).queryByRole('button', {
+          name: ptBRMessages['projects.openBoardAction'],
+        }),
+      ).not.toBeInTheDocument();
+      expect(
+        within(allowedListItem).getByRole('button', {
+          name: ptBRMessages['projects.openBoardAction'],
+        }),
+      ).toBeInTheDocument();
+
+      // Seleciona o projeto negado (ou garante seleção) -> apenas o item permitido exibe o botão na tela
+      await user.click(
+        within(deniedListItem).getByRole('button', { name: /Lancamento Plataforma PMS v1/ }),
+      );
+      await waitFor(() => {
+        expect(
+          screen.getAllByRole('button', { name: ptBRMessages['projects.openBoardAction'] }),
+        ).toHaveLength(1);
+      });
+      expect(
+        screen.queryByRole('link', { name: ptBRMessages['projects.openTasksAction'] }),
+      ).not.toBeInTheDocument();
+
+      // Seleciona o projeto permitido -> exibe botão na lista lateral e no painel de detalhe + link de tarefas
+      await user.click(
+        within(allowedListItem).getByRole('button', { name: /Projeto Secundário Com Quadro/ }),
+      );
+      await waitFor(() => {
+        expect(
+          screen.getAllByRole('button', { name: ptBRMessages['projects.openBoardAction'] }),
+        ).toHaveLength(2);
+      });
+      expect(
+        screen.getByRole('link', { name: ptBRMessages['projects.openTasksAction'] }),
+      ).toHaveAttribute('href', `/projects/${allowedProject.id}/tasks`);
+      expect(await axe(container)).toHaveNoViolations();
     },
   );
 });
