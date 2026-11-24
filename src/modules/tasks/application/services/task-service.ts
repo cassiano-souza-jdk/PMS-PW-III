@@ -491,6 +491,15 @@ function deduplicateTagIds(rawTagIds: readonly string[]): TagId[] {
   return result;
 }
 
+function resolveTaskReadAction(
+  task: Task | null,
+  project: TaskProjectSummary | null,
+): typeof PERMISSION_CODES.TRASH_VIEW | typeof PERMISSION_CODES.TASK_VIEW {
+  return task !== null && isSoftDeleted(task) && project !== null && !isSoftDeleted(project)
+    ? PERMISSION_CODES.TRASH_VIEW
+    : PERMISSION_CODES.TASK_VIEW;
+}
+
 function buildTaskResource(input: {
   readonly organizationId: OrganizationId;
   readonly taskId: TaskId;
@@ -815,10 +824,7 @@ export class TaskService {
       participantIds: activeParticipantIds,
     });
 
-    const viewAction =
-      task !== null && isSoftDeleted(task) && project !== null && !isSoftDeleted(project)
-        ? PERMISSION_CODES.TRASH_VIEW
-        : PERMISSION_CODES.TASK_VIEW;
+    const viewAction = resolveTaskReadAction(task, project);
 
     assertAuthorized({
       actor,
@@ -903,7 +909,7 @@ export class TaskService {
 
     assertAuthorized({
       actor,
-      action: PERMISSION_CODES.TASK_VIEW,
+      action: resolveTaskReadAction(task, project),
       resource: buildTaskResource({
         organizationId: validatedOrgId,
         taskId: validatedTaskId,
@@ -936,7 +942,7 @@ export class TaskService {
 
     assertAuthorized({
       actor,
-      action: PERMISSION_CODES.TASK_VIEW,
+      action: resolveTaskReadAction(task, project),
       resource: buildTaskResource({
         organizationId: validatedOrgId,
         taskId: validatedTaskId,
@@ -972,10 +978,11 @@ export class TaskService {
         this.deps.taskAttachments.findById(validatedOrgId, validatedAttachmentId),
       ]);
 
-    // Revalidates strict TASK_VIEW on the owning task BEFORE ever touching AttachmentBlobStorePort (ADR-0011 §2.4)
+    // Revalidates strict read permission (TASK_VIEW or TRASH_VIEW for soft-deleted task in active project)
+    // on the owning task BEFORE ever touching AttachmentBlobStorePort (ADR-0011 §2.4)
     assertAuthorized({
       actor,
-      action: PERMISSION_CODES.TASK_VIEW,
+      action: resolveTaskReadAction(task, project),
       resource: buildTaskResource({
         organizationId: validatedOrgId,
         taskId: validatedTaskId,
@@ -1025,7 +1032,7 @@ export class TaskService {
 
     assertAuthorized({
       actor,
-      action: PERMISSION_CODES.TASK_HISTORY_VIEW,
+      action: resolveTaskReadAction(task, project),
       resource: buildTaskResource({
         organizationId: validatedOrgId,
         taskId: validatedTaskId,

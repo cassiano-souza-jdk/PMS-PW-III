@@ -729,4 +729,69 @@ describe('Phase 07 MSW Endpoints Integration (Tasks, Subtasks, Comments, Attachm
       ),
     ).rejects.toThrowError(ConflictError);
   });
+
+  it('rejeita MIME executáveis/ativos web com HTTP 422 via POST .../attachments e preserva tipos seguros', async () => {
+    const validBase64 = globalThis.btoa('safe-or-unsafe-payload');
+    const disallowedMimes = [
+      {
+        fileName: 'app.exe',
+        mimeType: 'application/x-msdownload',
+        expectedBase: 'application/x-msdownload',
+      },
+      { fileName: 'script.sh', mimeType: 'application/x-sh', expectedBase: 'application/x-sh' },
+      { fileName: 'evil.html', mimeType: 'text/html', expectedBase: 'text/html' },
+      {
+        fileName: 'evil-utf8.html',
+        mimeType: 'text/html; charset=utf-8',
+        expectedBase: 'text/html',
+      },
+      { fileName: 'xss.svg', mimeType: 'image/svg+xml', expectedBase: 'image/svg+xml' },
+    ] as const;
+
+    for (const entry of disallowedMimes) {
+      let caught: unknown;
+      try {
+        await container.httpClient.post<TaskAttachment>(
+          `/organizations/${DEMO_ORG_ID}/tasks/${DEMO_TASK_IDS.FOUNDATION_TASK}/attachments`,
+          {
+            fileName: entry.fileName,
+            mimeType: entry.mimeType,
+            contentBase64: validBase64,
+          },
+          { actorUserId: DEMO_MEMBER_USER_ID },
+        );
+      } catch (error) {
+        caught = error;
+      }
+      expect(caught).toBeInstanceOf(ValidationError);
+      expect((caught as ValidationError).details).toMatchObject({
+        httpStatus: 422,
+        field: 'mimeType',
+        mimeType: entry.expectedBase,
+        reason: 'DISALLOWED_MIME_TYPE',
+      });
+    }
+
+    const safeText = await container.httpClient.post<TaskAttachment>(
+      `/organizations/${DEMO_ORG_ID}/tasks/${DEMO_TASK_IDS.FOUNDATION_TASK}/attachments`,
+      {
+        fileName: 'nota-utf8.txt',
+        mimeType: 'text/plain; charset=utf-8',
+        contentBase64: validBase64,
+      },
+      { actorUserId: DEMO_MEMBER_USER_ID },
+    );
+    expect(safeText.mimeType).toBe('text/plain; charset=utf-8');
+
+    const safePdf = await container.httpClient.post<TaskAttachment>(
+      `/organizations/${DEMO_ORG_ID}/tasks/${DEMO_TASK_IDS.FOUNDATION_TASK}/attachments`,
+      {
+        fileName: 'relatorio.pdf',
+        mimeType: 'application/pdf',
+        contentBase64: validBase64,
+      },
+      { actorUserId: DEMO_MEMBER_USER_ID },
+    );
+    expect(safePdf.mimeType).toBe('application/pdf');
+  });
 });

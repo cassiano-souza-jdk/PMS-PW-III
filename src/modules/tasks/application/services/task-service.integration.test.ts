@@ -1453,4 +1453,234 @@ describe('TaskService Integration (Lifecycle, Participants, Subtasks, Comments, 
       ).rejects.toThrowError(NotFoundError);
     });
   });
+
+  describe('Hardening F07-T08: MIME denylist em anexos e simetria TRASH_VIEW em leituras', () => {
+    it('rejeita uploadTaskAttachment para MIME executáveis/ativos web e preserva tipos seguros com charset', async () => {
+      const { manager, member, organization, project } = await setupProjectFixture();
+      const task = await container.services.tasks.createTask(
+        manager.user.id,
+        organization.id,
+        project.id,
+        {
+          title: 'Tarefa Validação MIME F07-T08',
+          assigneeId: member.user.id,
+        },
+      );
+
+      const disallowedCases = [
+        {
+          fileName: 'payload.exe',
+          mimeType: 'application/x-msdownload',
+          expectedBase: 'application/x-msdownload',
+        },
+        {
+          fileName: 'install.sh',
+          mimeType: 'application/x-sh',
+          expectedBase: 'application/x-sh',
+        },
+        {
+          fileName: 'page.html',
+          mimeType: 'text/html',
+          expectedBase: 'text/html',
+        },
+        {
+          fileName: 'page-utf8.html',
+          mimeType: 'text/html; charset=utf-8',
+          expectedBase: 'text/html',
+        },
+        {
+          fileName: 'vector.svg',
+          mimeType: 'image/svg+xml',
+          expectedBase: 'image/svg+xml',
+        },
+      ] as const;
+
+      for (const testCase of disallowedCases) {
+        let caught: unknown;
+        try {
+          await container.services.tasks.uploadTaskAttachment(
+            member.user.id,
+            organization.id,
+            task.id,
+            {
+              fileName: testCase.fileName,
+              mimeType: testCase.mimeType,
+              bytes: new TextEncoder().encode('malicious payload'),
+            },
+          );
+        } catch (error) {
+          caught = error;
+        }
+        expect(caught).toBeInstanceOf(ValidationError);
+        expect((caught as ValidationError).details).toMatchObject({
+          field: 'mimeType',
+          mimeType: testCase.expectedBase,
+          reason: 'DISALLOWED_MIME_TYPE',
+        });
+      }
+
+      expect(
+        await container.services.tasks.listTaskAttachments(
+          member.user.id,
+          organization.id,
+          task.id,
+        ),
+      ).toHaveLength(0);
+
+      const safeText = await container.services.tasks.uploadTaskAttachment(
+        member.user.id,
+        organization.id,
+        task.id,
+        {
+          fileName: 'readme.txt',
+          mimeType: 'text/plain; charset=utf-8',
+          bytes: new TextEncoder().encode('safe text content'),
+        },
+      );
+      expect(safeText.mimeType).toBe('text/plain; charset=utf-8');
+
+      const safePdf = await container.services.tasks.uploadTaskAttachment(
+        member.user.id,
+        organization.id,
+        task.id,
+        {
+          fileName: 'spec.pdf',
+          mimeType: 'application/pdf',
+          bytes: new TextEncoder().encode('%PDF-1.7'),
+        },
+      );
+      expect(safePdf.mimeType).toBe('application/pdf');
+    });
+
+    it('aplica paridade TRASH_VIEW em listTaskComments, listTaskAttachments, getTaskAttachmentContent e listTaskDeadlineHistory mantendo fail-closed para MEMBER e projeto soft-deleted', async () => {
+      const { admin, manager, member, organization, project } = await setupProjectFixture();
+
+      const task = await container.services.tasks.createTask(
+        manager.user.id,
+        organization.id,
+        project.id,
+        {
+          title: 'Tarefa Soft-Deleted Paridade TRASH_VIEW',
+          assigneeId: member.user.id,
+          dueDate: asIsoDateTime('2026-07-20T18:00:00.000Z'),
+          deadlineJustification: 'Prazo inicial para histórico',
+        },
+      );
+
+      const comment = await container.services.tasks.addTaskComment(
+        member.user.id,
+        organization.id,
+        task.id,
+        { body: 'Comentário antes do soft-delete' },
+      );
+
+      const attachmentBytes = new TextEncoder().encode('Conteúdo preservado na lixeira');
+      const attachment = await container.services.tasks.uploadTaskAttachment(
+        member.user.id,
+        organization.id,
+        task.id,
+        {
+          fileName: 'documento.pdf',
+          mimeType: 'application/pdf',
+          bytes: attachmentBytes,
+        },
+      );
+
+      await container.services.tasks.deleteTask(manager.user.id, organization.id, task.id, {
+        reason: 'Enviada para lixeira',
+      });
+
+      // ADMIN e MANAGER com TRASH_VIEW leem detalhe, comentários, anexos, binário e histórico em projeto ativo
+      for (const authorizedUserId of [admin.user.id, manager.user.id]) {
+        const detail = await container.services.tasks.getTaskDetail(
+          authorizedUserId,
+          organization.id,
+          task.id,
+        );
+        expect(detail.task.deletedAt).toBeDefined();
+
+        const comments = await container.services.tasks.listTaskComments(
+          authorizedUserId,
+          organization.id,
+          task.id,
+        );
+        expect(comments.map((item) => item.id)).toContain(comment.id);
+
+        const attachments = await container.services.tasks.listTaskAttachments(
+          authorizedUserId,
+          organization.id,
+          task.id,
+        );
+        expect(attachments.map((item) => item.id)).toContain(attachment.id);
+
+        const content = await container.services.tasks.getTaskAttachmentContent(
+          authorizedUserId,
+          organization.id,
+          task.id,
+          attachment.id,
+        );
+        expect(Array.from(content.bytes)).toEqual(Array.from(attachmentBytes));
+
+        const history = await container.services.tasks.listTaskDeadlineHistory(
+          authorizedUserId,
+          organization.id,
+          task.id,
+        );
+        expect(history).toHaveLength(1);
+      }
+
+      // MEMBER sem TRASH_VIEW continua bloqueado (AuthorizationError) e não toca o blob store
+      const getBlobSpy = vi.spyOn(container.attachmentBlobStore, 'getBlob');
+      await expect(
+        container.services.tasks.getTaskDetail(member.user.id, organization.id, task.id),
+      ).rejects.toThrowError(AuthorizationError);
+      await expect(
+        container.services.tasks.listTaskComments(member.user.id, organization.id, task.id),
+      ).rejects.toThrowError(AuthorizationError);
+      await expect(
+        container.services.tasks.listTaskAttachments(member.user.id, organization.id, task.id),
+      ).rejects.toThrowError(AuthorizationError);
+      await expect(
+        container.services.tasks.getTaskAttachmentContent(
+          member.user.id,
+          organization.id,
+          task.id,
+          attachment.id,
+        ),
+      ).rejects.toThrowError(AuthorizationError);
+      await expect(
+        container.services.tasks.listTaskDeadlineHistory(member.user.id, organization.id, task.id),
+      ).rejects.toThrowError(AuthorizationError);
+      expect(getBlobSpy).not.toHaveBeenCalled();
+
+      // Se o projeto também for soft-deleted, todas as leituras falham fechadas com ConflictError até para ADMIN/MANAGER
+      await container.services.projects.deleteProject(admin.user.id, organization.id, project.id, {
+        reason: 'Projeto excluído logicamente',
+      });
+
+      for (const actorId of [admin.user.id, manager.user.id]) {
+        await expect(
+          container.services.tasks.getTaskDetail(actorId, organization.id, task.id),
+        ).rejects.toThrowError(ConflictError);
+        await expect(
+          container.services.tasks.listTaskComments(actorId, organization.id, task.id),
+        ).rejects.toThrowError(ConflictError);
+        await expect(
+          container.services.tasks.listTaskAttachments(actorId, organization.id, task.id),
+        ).rejects.toThrowError(ConflictError);
+        await expect(
+          container.services.tasks.getTaskAttachmentContent(
+            actorId,
+            organization.id,
+            task.id,
+            attachment.id,
+          ),
+        ).rejects.toThrowError(ConflictError);
+        await expect(
+          container.services.tasks.listTaskDeadlineHistory(actorId, organization.id, task.id),
+        ).rejects.toThrowError(ConflictError);
+      }
+      expect(getBlobSpy).not.toHaveBeenCalled();
+    });
+  });
 });

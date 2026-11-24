@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { AuthorizationError, ValidationError } from '@/shared/errors';
 import {
+  DISALLOWED_ATTACHMENT_MIME_TYPES,
   MAX_ATTACHMENT_SIZE_BYTES,
   MAX_CONTEXT_ATTACHMENTS_SIZE_BYTES,
   METRIC_AVAILABILITY_STATUSES,
@@ -23,6 +24,7 @@ import {
   createDomainEvent,
   createPaginatedResult,
   diffDurationMs,
+  isDisallowedAttachmentMimeType,
   isIsoDate,
   isIsoDateTime,
   isMetricAvailable,
@@ -273,5 +275,86 @@ describe('Shared Kernel — Attachment Quotas (15 MB file / 50 MB context)', () 
         existingContextTotalBytes: 0,
       }),
     ).toThrow(ValidationError);
+  });
+
+  it('enforces canonical DISALLOWED_ATTACHMENT_MIME_TYPES denylist while preserving safe parameterized MIME types', () => {
+    expect(Object.isFrozen(DISALLOWED_ATTACHMENT_MIME_TYPES)).toBe(true);
+    expect(DISALLOWED_ATTACHMENT_MIME_TYPES).toEqual([
+      'application/x-msdownload',
+      'application/x-dosexec',
+      'application/x-msdos-program',
+      'application/x-sh',
+      'application/x-csh',
+      'application/x-shellscript',
+      'application/x-executable',
+      'application/x-mach-binary',
+      'application/x-elf',
+      'application/vnd.microsoft.portable-executable',
+      'application/javascript',
+      'text/javascript',
+      'application/ecmascript',
+      'text/html',
+      'application/xhtml+xml',
+      'image/svg+xml',
+    ]);
+
+    for (const mimeType of DISALLOWED_ATTACHMENT_MIME_TYPES) {
+      expect(isDisallowedAttachmentMimeType(mimeType)).toBe(true);
+      expect(isDisallowedAttachmentMimeType(` ${mimeType.toUpperCase()} ; charset=utf-8 `)).toBe(
+        true,
+      );
+
+      let caught: unknown;
+      try {
+        validateAttachmentQuota({
+          fileName: 'blocked-file',
+          mimeType: `${mimeType}; charset=utf-8`,
+          sizeBytes: 128,
+          existingContextTotalBytes: 0,
+        });
+      } catch (error) {
+        caught = error;
+      }
+      expect(caught).toBeInstanceOf(ValidationError);
+      expect((caught as ValidationError).details).toMatchObject({
+        field: 'mimeType',
+        mimeType,
+        reason: 'DISALLOWED_MIME_TYPE',
+      });
+    }
+
+    // Empty base MIME (e.g. parameter-only) must be rejected
+    expect(() =>
+      validateAttachmentQuota({
+        fileName: 'param-only.txt',
+        mimeType: '; charset=utf-8',
+        sizeBytes: 128,
+        existingContextTotalBytes: 0,
+      }),
+    ).toThrow(ValidationError);
+
+    // Safe MIME types (including charset parameter) are preserved
+    expect(isDisallowedAttachmentMimeType('text/plain; charset=utf-8')).toBe(false);
+    expect(isDisallowedAttachmentMimeType('application/pdf')).toBe(false);
+
+    expect(() =>
+      validateAttachmentQuota({
+        fileName: 'notes.txt',
+        mimeType: 'text/plain; charset=utf-8',
+        sizeBytes: 256,
+        existingContextTotalBytes: 0,
+        allowedMimeTypes: ['text/plain'],
+      }),
+    ).not.toThrow();
+
+    expect(() =>
+      validateAttachmentQuota({
+        fileName: 'manual.pdf',
+        mimeType: 'application/pdf',
+        sizeBytes: 256,
+        existingContextTotalBytes: 0,
+        allowedMimeTypes: ['application/pdf'],
+      }),
+    ).not.toThrow();
   });
 });

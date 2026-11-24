@@ -9,6 +9,37 @@ export const MAX_ATTACHMENT_SIZE_BYTES = 15 * 1024 * 1024;
 /** Maximum allowed cumulative size per task or feedback context (50 MB — DATA-PERSISTENCE.md). */
 export const MAX_CONTEXT_ATTACHMENTS_SIZE_BYTES = 50 * 1024 * 1024;
 
+/** Canonical denylist of executable and active web attachment MIME types. */
+export const DISALLOWED_ATTACHMENT_MIME_TYPES = Object.freeze([
+  'application/x-msdownload',
+  'application/x-dosexec',
+  'application/x-msdos-program',
+  'application/x-sh',
+  'application/x-csh',
+  'application/x-shellscript',
+  'application/x-executable',
+  'application/x-mach-binary',
+  'application/x-elf',
+  'application/vnd.microsoft.portable-executable',
+  'application/javascript',
+  'text/javascript',
+  'application/ecmascript',
+  'text/html',
+  'application/xhtml+xml',
+  'image/svg+xml',
+]) as readonly string[];
+
+const DISALLOWED_ATTACHMENT_MIME_TYPE_SET = new Set<string>(DISALLOWED_ATTACHMENT_MIME_TYPES);
+
+/**
+ * Normalizes a MIME string (stripping optional parameters like `; charset=utf-8`)
+ * and checks whether the base MIME type belongs to `DISALLOWED_ATTACHMENT_MIME_TYPES`.
+ */
+export function isDisallowedAttachmentMimeType(mimeType: string): boolean {
+  const baseMimeType = mimeType.split(';', 1)[0]?.trim().toLowerCase() ?? '';
+  return DISALLOWED_ATTACHMENT_MIME_TYPE_SET.has(baseMimeType);
+}
+
 export interface AttachmentDescriptor extends OrganizationScoped {
   readonly id: AttachmentId;
   readonly fileName: string;
@@ -60,16 +91,30 @@ export function validateAttachmentQuota(input: ValidateAttachmentQuotaInput): vo
   }
 
   const normalizedMimeType = input.mimeType.trim().toLowerCase();
-  if (normalizedMimeType.length === 0) {
+  const baseMimeType = normalizedMimeType.split(';', 1)[0]?.trim() ?? '';
+  if (baseMimeType.length === 0) {
     throw new ValidationError('Attachment "mimeType" must be a non-empty string.', {
       details: { field: 'mimeType' },
+    });
+  }
+
+  if (isDisallowedAttachmentMimeType(normalizedMimeType)) {
+    throw new ValidationError(`Attachment MIME type "${baseMimeType}" is not allowed.`, {
+      details: {
+        field: 'mimeType',
+        mimeType: baseMimeType,
+        reason: 'DISALLOWED_MIME_TYPE',
+      },
     });
   }
 
   if (
     input.allowedMimeTypes !== undefined &&
     input.allowedMimeTypes.length > 0 &&
-    !input.allowedMimeTypes.some((allowed) => allowed.trim().toLowerCase() === normalizedMimeType)
+    !input.allowedMimeTypes.some((allowed) => {
+      const normalizedAllowed = allowed.trim().toLowerCase();
+      return normalizedAllowed === baseMimeType || normalizedAllowed === normalizedMimeType;
+    })
   ) {
     throw new ValidationError(`Attachment MIME type "${normalizedMimeType}" is not allowed.`, {
       details: { field: 'mimeType', mimeType: normalizedMimeType },
