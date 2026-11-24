@@ -1,8 +1,10 @@
 import { IDBFactory, IDBKeyRange } from 'fake-indexeddb';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { createAppContainer, type AppCompositionContainer } from '@/app/composition';
+import { AUDIT_CATEGORIES } from '@/modules/audit';
 import { InMemoryEphemeralSessionPointer } from '@/modules/authentication/infrastructure/session/ephemeral-session-pointer';
 import { IMPEDIMENT_CATEGORIES, IMPEDIMENT_STATUSES } from '@/modules/impediments';
+import { BOARD_COLUMN_ROLES, doesTaskStatusOccupyWip } from '@/modules/kanban';
 import { asOrganizationMemberId } from '@/modules/organizations';
 import { PROJECT_MEMBER_ROLES } from '@/modules/projects';
 import { createDefaultOrganizationSettings } from '@/modules/settings';
@@ -313,5 +315,143 @@ describe('ImpedimentService Integration (Categories, Transitions, Task BLOCKED/R
     );
     expect(resolved.status).toBe(IMPEDIMENT_STATUSES.RESOLVED);
     expect(resolved.resolvedByUserId).toBe(participatingManager.user.id);
+  });
+
+  it('cobre todas as 7 categorias de impedimento, preserva contagem WIP para BLOCKED e restaura TODO em tarefa não iniciada', async () => {
+    const { manager, member, organization, project } = await setupFixture();
+
+    const board = await container.services.kanban.getProjectBoard(
+      manager.user.id,
+      organization.id,
+      project.id,
+    );
+    const initialCol = board.columns.find((c) => c.columnRole === BOARD_COLUMN_ROLES.INITIAL)!;
+    const execCol = board.columns.find((c) => c.name === 'Em Execução')!;
+
+    // Configura WIP = 1 na coluna Em Execução e inicia uma tarefa nela
+    await container.services.kanban.updateColumn(
+      manager.user.id,
+      organization.id,
+      project.id,
+      execCol.id,
+      { wipLimit: 1 },
+    );
+
+    const execTask = await container.services.tasks.createTask(
+      manager.user.id,
+      organization.id,
+      project.id,
+      { title: 'Tarefa em Execução para WIP BLOCKED', assigneeId: member.user.id },
+    );
+    await container.services.tasks.startTask(member.user.id, organization.id, execTask.id);
+
+    // Tarefa ainda não iniciada na coluna INITIAL (status TODO)
+    const todoTask = await container.services.tasks.createTask(
+      manager.user.id,
+      organization.id,
+      project.id,
+      { title: 'Tarefa TODO com Impedimento', columnId: initialCol.id, assigneeId: member.user.id },
+    );
+    const extraTodoTask = await container.services.tasks.createTask(
+      manager.user.id,
+      organization.id,
+      project.id,
+      { title: 'Segunda Tarefa TODO', columnId: initialCol.id, assigneeId: member.user.id },
+    );
+    const todoInitialMovedAt = todoTask.lastMovedAt;
+
+    // Abre impedimento na execTask -> status passa para BLOCKED mas continua ocupando WIP = 1/1
+    const blockingForWip = await container.services.impediments.createImpediment(
+      member.user.id,
+      organization.id,
+      execTask.id,
+      {
+        category: IMPEDIMENT_CATEGORIES.RESOURCE_UNAVAILABILITY,
+        severity: IMPEDIMENT_SEVERITIES.HIGH,
+        description: 'Servidor indisponível',
+      },
+    );
+    expect(doesTaskStatusOccupyWip(TASK_STATUSES.BLOCKED)).toBe(true);
+
+    const boardWhileBlocked = await container.services.kanban.getProjectBoard(
+      manager.user.id,
+      organization.id,
+      project.id,
+    );
+    expect(boardWhileBlocked.columns.find((c) => c.id === execCol.id)?.occupyingTaskCount).toBe(1);
+
+    // Tentar mover extraTodoTask para execCol falha por limite WIP ocupado pela tarefa BLOCKED
+    await expect(
+      container.services.kanban.moveCard(
+        member.user.id,
+        organization.id,
+        project.id,
+        extraTodoTask.id,
+        { targetColumnId: execCol.id },
+      ),
+    ).rejects.toThrowError(ConflictError);
+
+    // Cria e encerra todas as 7 categorias na todoTask (status TODO -> BLOCKED -> TODO)
+    const allCategories = Object.values(IMPEDIMENT_CATEGORIES);
+    expect(allCategories).toHaveLength(7);
+
+    const tCat = asIsoDateTime('2026-07-23T14:00:00.000Z');
+    currentNow = tCat;
+
+    for (const category of allCategories) {
+      const imp = await container.services.impediments.createImpediment(
+        member.user.id,
+        organization.id,
+        todoTask.id,
+        {
+          category,
+          severity: IMPEDIMENT_SEVERITIES.MEDIUM,
+          description: `Bloqueio categoria ${category}`,
+        },
+      );
+      expect(imp.category).toBe(category);
+
+      const blockedTodo = await container.repositories.tasks.tasks.findById(
+        organization.id,
+        todoTask.id,
+      );
+      expect(blockedTodo?.status).toBe(TASK_STATUSES.BLOCKED);
+      expect(blockedTodo?.lastMovedAt).toBe(todoInitialMovedAt);
+      expect(blockedTodo?.lastActivityAt).toBe(tCat);
+
+      await container.services.impediments.transitionImpediment(
+        member.user.id,
+        organization.id,
+        todoTask.id,
+        imp.id,
+        {
+          targetStatus: IMPEDIMENT_STATUSES.RESOLVED,
+          resolutionNote: `Resolvido ${category}`,
+        },
+      );
+
+      const restoredTodo = await container.repositories.tasks.tasks.findById(
+        organization.id,
+        todoTask.id,
+      );
+      expect(restoredTodo?.status).toBe(TASK_STATUSES.TODO);
+      expect(restoredTodo?.completedAt).toBeUndefined();
+      expect(restoredTodo?.lastMovedAt).toBe(todoInitialMovedAt);
+    }
+
+    const auditPage = await container.repositories.audit.auditEvents.listByProject(
+      organization.id,
+      project.id,
+      { page: 1, pageSize: 50 },
+      { category: AUDIT_CATEGORIES.TASK },
+    );
+    const todoTransitionAudit = auditPage.items.find(
+      (e) =>
+        e.eventType === 'task.impediment.transitioned' &&
+        e.after?.taskStatusRestoredTo === TASK_STATUSES.TODO,
+    );
+    expect(todoTransitionAudit).toBeDefined();
+    expect(todoTransitionAudit?.after?.autoCompletesTask).toBe(false);
+    expect(blockingForWip.status).toBe(IMPEDIMENT_STATUSES.OPEN);
   });
 });
