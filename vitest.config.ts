@@ -17,6 +17,7 @@ export default defineConfig({
     setupFiles: ['./src/test/setup.ts'],
     include: ['src/**/*.{test,spec}.{ts,tsx}'],
     exclude: ['e2e/**', 'node_modules/**', 'dist/**'],
+    maxWorkers: 4,
     restoreMocks: true,
     clearMocks: true,
     coverage: {

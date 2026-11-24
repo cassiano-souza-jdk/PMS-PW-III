@@ -15,6 +15,8 @@ const AcceptInvitationPage = lazy(() => import('./pages/accept-invitation-page')
 const TeamsPage = lazy(() => import('./pages/teams-page'));
 const ProjectsPage = lazy(() => import('./pages/projects-page'));
 const ProjectBoardPage = lazy(() => import('./pages/project-board-page'));
+const ProjectTasksPage = lazy(() => import('./pages/project-tasks-page'));
+const TaskDetailPage = lazy(() => import('./pages/task-detail-page'));
 const PermissionsPage = lazy(() => import('./pages/permissions-page'));
 
 export function LazyFoundationHomePage() {
@@ -125,6 +127,22 @@ export function LazyProjectBoardPage() {
   return (
     <RouteSuspense>
       <ProjectBoardPage />
+    </RouteSuspense>
+  );
+}
+
+export function LazyProjectTasksPage() {
+  return (
+    <RouteSuspense>
+      <ProjectTasksPage />
+    </RouteSuspense>
+  );
+}
+
+export function LazyTaskDetailPage() {
+  return (
+    <RouteSuspense>
+      <TaskDetailPage />
     </RouteSuspense>
   );
 }

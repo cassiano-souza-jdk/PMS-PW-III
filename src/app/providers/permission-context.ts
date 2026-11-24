@@ -1,6 +1,7 @@
 import { createContext, useContext } from 'react';
 import type {
   AuthorizationDecision,
+  AuthorizationPolicyConfig,
   AuthorizationResource,
   AuthorizationScopeSummary,
   ExplicitDenyRule,
@@ -21,10 +22,12 @@ export interface PermissionContextValue {
   readonly can: (
     permission: PermissionCode,
     resourceOverrides?: PermissionResourceOverrides,
+    policyConfig?: Partial<AuthorizationPolicyConfig>,
   ) => boolean;
   readonly evaluate: (
     permission: PermissionCode,
     resourceOverrides?: PermissionResourceOverrides,
+    policyConfig?: Partial<AuthorizationPolicyConfig>,
   ) => AuthorizationDecision;
   readonly refreshPermissions: () => Promise<void>;
   readonly isLoadingPermissions: boolean;

@@ -1,14 +1,17 @@
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { useComposition } from '@/app/composition';
 import {
+  DEFAULT_AUTHORIZATION_POLICY_CONFIG,
   evaluateAuthorization,
   type AuthorizationActor,
   type AuthorizationDecision,
+  type AuthorizationPolicyConfig,
   type AuthorizationResource,
   type AuthorizationScopeSummary,
   type MyActiveAccessRules,
   type PermissionCode,
 } from '@/modules/authorization';
+import { createDefaultOrganizationSettings, toAuthorizationPolicyConfig } from '@/modules/settings';
 import { asIsoDateTime } from '@/shared/kernel';
 import { useAuth } from './auth-context';
 import { useOrganization } from './organization-context';
@@ -34,11 +37,13 @@ const EMPTY_ACCESS_RULES: MyActiveAccessRules = Object.freeze({
 interface LoadedPermissionRulesState {
   readonly contextKey: string | null;
   readonly rules: MyActiveAccessRules;
+  readonly policyConfig: AuthorizationPolicyConfig;
 }
 
 const INITIAL_RULES_STATE: LoadedPermissionRulesState = {
   contextKey: null,
   rules: EMPTY_ACCESS_RULES,
+  policyConfig: DEFAULT_AUTHORIZATION_POLICY_CONFIG,
 };
 
 /**
@@ -49,7 +54,7 @@ const INITIAL_RULES_STATE: LoadedPermissionRulesState = {
  * A autorização definitiva permanece obrigatória nos casos de uso de aplicação.
  */
 export function PermissionProvider({ children }: PermissionProviderProps) {
-  const { services } = useComposition();
+  const { services, repositories } = useComposition();
   const { isAuthenticated, user } = useAuth();
   const { activeOrganization } = useOrganization();
 
@@ -75,16 +80,23 @@ export function PermissionProvider({ children }: PermissionProviderProps) {
 
     async function syncActiveRules() {
       try {
-        const rules = await services.authorization.listMyActiveAccessRules(
-          targetUserId,
-          targetOrgId,
-        );
+        const [rules, settings] = await Promise.all([
+          services.authorization.listMyActiveAccessRules(targetUserId, targetOrgId),
+          repositories.settings.organizationSettings
+            .findByOrganization(targetOrgId)
+            .catch(() => null),
+        ]);
         if (!isActive) {
           return;
         }
+        const nowIso = asIsoDateTime(new Date().toISOString());
+        const policyConfig = toAuthorizationPolicyConfig(
+          settings ?? createDefaultOrganizationSettings(targetOrgId, nowIso),
+        );
         setRulesState({
           contextKey: targetKey,
           rules,
+          policyConfig,
         });
       } catch {
         // Fallback gracioso em ambientes sem IndexedDB (ex.: testes unitários jsdom)
@@ -94,6 +106,7 @@ export function PermissionProvider({ children }: PermissionProviderProps) {
         setRulesState({
           contextKey: targetKey,
           rules: EMPTY_ACCESS_RULES,
+          policyConfig: DEFAULT_AUTHORIZATION_POLICY_CONFIG,
         });
       }
     }
@@ -103,7 +116,13 @@ export function PermissionProvider({ children }: PermissionProviderProps) {
     return () => {
       isActive = false;
     };
-  }, [activeOrgId, authenticatedUserId, contextKey, services.authorization]);
+  }, [
+    activeOrgId,
+    authenticatedUserId,
+    contextKey,
+    repositories.settings.organizationSettings,
+    services.authorization,
+  ]);
 
   const refreshPermissions = useCallback(async (): Promise<void> => {
     if (authenticatedUserId === null || activeOrgId === null || contextKey === null) {
@@ -114,23 +133,37 @@ export function PermissionProvider({ children }: PermissionProviderProps) {
     const targetKey = contextKey;
     setIsRefreshing(true);
     try {
-      const rules = await services.authorization.listMyActiveAccessRules(
-        authenticatedUserId,
-        activeOrgId,
+      const [rules, settings] = await Promise.all([
+        services.authorization.listMyActiveAccessRules(authenticatedUserId, activeOrgId),
+        repositories.settings.organizationSettings
+          .findByOrganization(activeOrgId)
+          .catch(() => null),
+      ]);
+      const nowIso = asIsoDateTime(new Date().toISOString());
+      const policyConfig = toAuthorizationPolicyConfig(
+        settings ?? createDefaultOrganizationSettings(activeOrgId, nowIso),
       );
       setRulesState({
         contextKey: targetKey,
         rules,
+        policyConfig,
       });
     } catch {
       setRulesState({
         contextKey: targetKey,
         rules: EMPTY_ACCESS_RULES,
+        policyConfig: DEFAULT_AUTHORIZATION_POLICY_CONFIG,
       });
     } finally {
       setIsRefreshing(false);
     }
-  }, [activeOrgId, authenticatedUserId, contextKey, services.authorization]);
+  }, [
+    activeOrgId,
+    authenticatedUserId,
+    contextKey,
+    repositories.settings.organizationSettings,
+    services.authorization,
+  ]);
 
   // Reset imediato ao trocar activeOrganizationId ou fazer logout (sem flash cross-org — ADR-0009 §4)
   const effectiveRules = useMemo<MyActiveAccessRules>(() => {
@@ -139,6 +172,13 @@ export function PermissionProvider({ children }: PermissionProviderProps) {
     }
     return rulesState.rules;
   }, [contextKey, rulesState.contextKey, rulesState.rules]);
+
+  const effectivePolicyConfig = useMemo<AuthorizationPolicyConfig>(() => {
+    if (contextKey === null || rulesState.contextKey !== contextKey) {
+      return DEFAULT_AUTHORIZATION_POLICY_CONFIG;
+    }
+    return rulesState.policyConfig;
+  }, [contextKey, rulesState.contextKey, rulesState.policyConfig]);
 
   const isLoadingPermissions =
     contextKey !== null && (isRefreshing || rulesState.contextKey !== contextKey);
@@ -185,6 +225,7 @@ export function PermissionProvider({ children }: PermissionProviderProps) {
     (
       permission: PermissionCode,
       resourceOverrides?: PermissionResourceOverrides,
+      policyConfigOverride?: Partial<AuthorizationPolicyConfig>,
     ): AuthorizationDecision => {
       const resource: AuthorizationResource = {
         exists: true,
@@ -198,15 +239,23 @@ export function PermissionProvider({ children }: PermissionProviderProps) {
         resource,
         context: {
           now: asIsoDateTime(new Date().toISOString()),
+          policyConfig:
+            policyConfigOverride !== undefined
+              ? { ...effectivePolicyConfig, ...policyConfigOverride }
+              : effectivePolicyConfig,
         },
       });
     },
-    [activeOrganization, actor],
+    [activeOrganization, actor, effectivePolicyConfig],
   );
 
   const can = useCallback(
-    (permission: PermissionCode, resourceOverrides?: PermissionResourceOverrides): boolean => {
-      return evaluate(permission, resourceOverrides).allowed;
+    (
+      permission: PermissionCode,
+      resourceOverrides?: PermissionResourceOverrides,
+      policyConfigOverride?: Partial<AuthorizationPolicyConfig>,
+    ): boolean => {
+      return evaluate(permission, resourceOverrides, policyConfigOverride).allowed;
     },
     [evaluate],
   );
