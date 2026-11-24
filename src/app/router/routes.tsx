@@ -12,9 +12,11 @@ import {
   LazyPermissionsPage,
   LazyProfilePage,
   LazyProjectBoardPage,
+  LazyProjectTasksPage,
   LazyProjectsPage,
   LazyRecoverPasswordPage,
   LazyRegisterPage,
+  LazyTaskDetailPage,
   LazyTeamsPage,
 } from './lazy-pages';
 import { RequireAuth } from './require-auth';
@@ -62,6 +64,14 @@ export const appRoutes: RouteObject[] = [
           {
             path: 'projects/:projectId/board',
             element: <LazyProjectBoardPage />,
+          },
+          {
+            path: 'projects/:projectId/tasks',
+            element: <LazyProjectTasksPage />,
+          },
+          {
+            path: 'projects/:projectId/tasks/:taskId',
+            element: <LazyTaskDetailPage />,
           },
           {
             path: 'invitations',

@@ -815,9 +815,14 @@ export class TaskService {
       participantIds: activeParticipantIds,
     });
 
+    const viewAction =
+      task !== null && isSoftDeleted(task) && project !== null && !isSoftDeleted(project)
+        ? PERMISSION_CODES.TRASH_VIEW
+        : PERMISSION_CODES.TASK_VIEW;
+
     assertAuthorized({
       actor,
-      action: PERMISSION_CODES.TASK_VIEW,
+      action: viewAction,
       resource: taskResource,
       context: { now, policyConfig },
     });

@@ -567,6 +567,7 @@ export const ptBRMessages = {
   'tasks.priority.CRITICAL': 'Crítica',
 
   'tasks.list.title': 'Tarefas — {name}',
+  'tasks.list.pageTitle': 'Tarefas — {name} | PMS',
   'tasks.list.subtitle':
     'Consulte, filtre, crie e acompanhe tarefas, prazos, etiquetas, bloqueios e entregas deste projeto.',
   'tasks.list.backToProjects': 'Voltar para projetos',
@@ -597,9 +598,11 @@ export const ptBRMessages = {
   'tasks.filters.clearAction': 'Limpar filtros',
   'tasks.sort.label': 'Ordenar por',
   'tasks.sort.order': 'Ordem no quadro',
+  'tasks.sort.titleAsc': 'Título (A–Z)',
   'tasks.sort.priorityDesc': 'Maior prioridade',
   'tasks.sort.dueDateAsc': 'Prazo mais próximo',
   'tasks.sort.lastActivityDesc': 'Atividade mais recente',
+  'tasks.sort.lastMovedDesc': 'Movimentação mais recente',
   'tasks.sort.createdAtDesc': 'Criação mais recente',
 
   'tasks.create.title': 'Nova tarefa',
@@ -639,8 +642,11 @@ export const ptBRMessages = {
   'tasks.fields.assigneeDisplay': 'Responsável: {name}',
   'tasks.fields.dueDateDisplay': 'Prazo: {date}',
   'tasks.fields.columnDisplay': 'Coluna: {column}',
+  'tasks.fields.creatorDisplay': 'Criada por: {name}',
+  'tasks.fields.unknownUser': 'Usuário da organização',
 
   'tasks.detail.title': 'Detalhes da tarefa',
+  'tasks.detail.pageTitle': '{title} | PMS',
   'tasks.detail.backToList': 'Voltar para lista de tarefas',
   'tasks.detail.backToBoard': 'Ir para quadro Kanban',
   'tasks.detail.noPermission':
@@ -728,6 +734,8 @@ export const ptBRMessages = {
   'tasks.cycles.effectiveStartedAtLabel': 'Execução efetiva em: {date}',
   'tasks.cycles.completedAtLabel': 'Concluído em: {date}',
   'tasks.cycles.reopenReasonLabel': 'Motivo da reabertura: {reason}',
+  'tasks.cycles.effectiveDurationLabel': 'Duração efetiva: {duration}',
+  'tasks.cycles.pausedDurationLabel': 'Tempo em pausa: {duration}',
   'tasks.cycles.empty': 'Nenhum ciclo de execução registrado.',
 
   'tasks.deadlineHistory.title': 'Histórico de prazos',
@@ -806,6 +814,8 @@ export const ptBRMessages = {
   'subtasks.reorderAnnouncement': 'Subtarefa "{title}" movida para a posição {position}.',
   'subtasks.reorderSuccess': 'Ordem das subtarefas atualizada.',
   'subtasks.delete.action': 'Excluir subtarefa',
+  'subtasks.delete.confirmTitle': 'Excluir subtarefa',
+  'subtasks.delete.confirmDescription': 'Deseja excluir permanentemente a subtarefa "{title}"?',
   'subtasks.delete.success': 'Subtarefa "{title}" excluída.',
   'subtasks.empty': 'Nenhuma subtarefa cadastrada nesta tarefa.',
 
@@ -834,6 +844,10 @@ export const ptBRMessages = {
   'comments.edit.systemImmutableError':
     'Registros automáticos do sistema não podem ser editados ou removidos.',
   'comments.delete.action': 'Excluir comentário',
+  'comments.delete.confirmTitle': 'Excluir comentário',
+  'comments.delete.confirmDescription':
+    'Deseja remover logicamente este comentário? O histórico de auditoria será preservado.',
+  'comments.delete.reasonLabel': 'Motivo da remoção (opcional)',
   'comments.delete.confirmAction': 'Confirmar exclusão',
   'comments.delete.success': 'Comentário excluído com sucesso.',
   'comments.empty': 'Nenhum comentário registrado nesta tarefa.',
@@ -860,6 +874,9 @@ export const ptBRMessages = {
   'attachments.download.action': 'Baixar anexo',
   'attachments.download.success': 'Download de "{fileName}" iniciado.',
   'attachments.delete.action': 'Excluir anexo',
+  'attachments.delete.confirmTitle': 'Excluir anexo',
+  'attachments.delete.confirmDescription':
+    'Deseja excluir permanentemente o anexo "{fileName}" e seu conteúdo binário local?',
   'attachments.delete.confirmAction': 'Confirmar exclusão do anexo',
   'attachments.delete.success': 'Anexo "{fileName}" excluído com sucesso.',
   'attachments.empty': 'Nenhum anexo enviado para esta tarefa.',
@@ -878,6 +895,9 @@ export const ptBRMessages = {
   'tags.catalog.saveAction': 'Salvar etiqueta',
   'tags.catalog.saveSuccess': 'Etiqueta "{name}" atualizada com sucesso.',
   'tags.catalog.deleteAction': 'Excluir etiqueta',
+  'tags.catalog.deleteConfirmTitle': 'Excluir etiqueta do catálogo',
+  'tags.catalog.deleteConfirmDescription':
+    'Excluir a etiqueta "{name}" a removerá de todas as tarefas associadas na organização.',
   'tags.catalog.deleteSuccess': 'Etiqueta "{name}" excluída do catálogo.',
   'tags.catalog.duplicateError': 'Já existe uma etiqueta com este nome nesta organização.',
   'tags.catalog.empty': 'Nenhuma etiqueta cadastrada no catálogo organizacional.',
@@ -907,6 +927,9 @@ export const ptBRMessages = {
     'Não é possível adicionar esta dependência porque ela criaria um ciclo entre tarefas.',
   'dependencies.add.duplicateError': 'Esta dependência já está cadastrada para a tarefa.',
   'dependencies.remove.action': 'Remover dependência',
+  'dependencies.remove.confirmTitle': 'Remover dependência',
+  'dependencies.remove.confirmDescription':
+    'Deseja remover este vínculo de dependência entre as tarefas?',
   'dependencies.remove.success': 'Dependência removida com sucesso.',
   'dependencies.empty': 'Nenhuma dependência visível registrada para esta tarefa.',
   'dependencies.noPermission':
@@ -927,6 +950,7 @@ export const ptBRMessages = {
   'impediments.status.IN_RESOLUTION': 'Em resolução',
   'impediments.status.RESOLVED': 'Resolvido',
   'impediments.status.CANCELLED': 'Cancelado',
+  'impediments.blockingBadge': 'Bloqueante',
   'impediments.title': 'Impedimentos da tarefa',
   'impediments.description':
     'Impedimentos abertos ou em resolução bloqueiam automaticamente a tarefa até serem resolvidos ou cancelados.',
@@ -950,6 +974,7 @@ export const ptBRMessages = {
   'impediments.transition.resolutionNoteLabel': 'Nota de resolução ou cancelamento (opcional)',
   'impediments.transition.resolutionNotePlaceholder':
     'Registre como o impedimento foi superado ou por que foi cancelado...',
+  'impediments.transition.confirmTitle': 'Confirmar atualização do impedimento',
   'impediments.transition.success': 'Status do impedimento atualizado para {status}.',
   'impediments.transition.noAutoCompleteHint':
     'Nota: resolver ou cancelar um impedimento desbloqueia a tarefa sem concluí-la automaticamente.',

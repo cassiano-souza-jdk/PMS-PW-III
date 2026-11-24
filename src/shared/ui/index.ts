@@ -13,3 +13,4 @@ export {
 } from './error-boundary';
 export { Input, type InputProps } from './input';
 export { Label, type LabelProps } from './label';
+export { ModalDialog, type ModalDialogProps } from './modal-dialog';
