@@ -1,4 +1,4 @@
-import { render, screen, within } from '@testing-library/react';
+import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { IDBFactory, IDBKeyRange } from 'fake-indexeddb';
 import { createMemoryRouter } from 'react-router';
@@ -6,12 +6,18 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { axe } from 'vitest-axe';
 import { App } from '@/app/App';
 import {
+  DEMO_ADMIN_USER_ID,
+  DEMO_COLUMN_IDS,
+  DEMO_MANAGER_USER_ID,
+  DEMO_ORG_ID,
   DEMO_PROJECT_ID,
   createAppContainer,
   type AppCompositionContainer,
 } from '@/app/composition';
 import { InMemoryEphemeralSessionPointer } from '@/modules/authentication/infrastructure/session/ephemeral-session-pointer';
+import { IMPEDIMENT_CATEGORIES } from '@/modules/impediments';
 import { ptBRMessages } from '@/shared/i18n';
+import { IMPEDIMENT_SEVERITIES, PRIORITIES } from '@/shared/kernel';
 import { createLogger, createMemoryLogSink } from '@/shared/logging';
 import { PMS_DATABASE_NAME, ensureDatabaseOpen } from '@/shared/persistence';
 import { appRoutes } from './routes';
@@ -100,7 +106,7 @@ describe('Focus Mode, Workload, Bottlenecks & DN-06 Settings Presentation + Rout
     { timeout: 30_000 },
     async () => {
       const user = userEvent.setup();
-      const { container, router } = await renderIsolatedApp('/demo');
+      const { container, appContainer, router } = await renderIsolatedApp('/demo');
 
       await screen.findByRole('heading', { level: 1, name: ptBRMessages['auth.demo.title'] });
       await user.click(screen.getByRole('button', { name: 'Entrar como Administrador' }));
@@ -108,6 +114,20 @@ describe('Focus Mode, Workload, Bottlenecks & DN-06 Settings Presentation + Rout
         level: 1,
         name: ptBRMessages['organizations.title'],
       });
+
+      // Ocupa 100% do WIP de "Em Revisao" (2/2) para garantir detecção determinística de alerta WIP
+      await appContainer.services.kanban.createQuickCard(
+        DEMO_ADMIN_USER_ID,
+        DEMO_ORG_ID,
+        DEMO_PROJECT_ID,
+        { title: 'Revisão WIP 1', columnId: DEMO_COLUMN_IDS.REVIEW },
+      );
+      await appContainer.services.kanban.createQuickCard(
+        DEMO_ADMIN_USER_ID,
+        DEMO_ORG_ID,
+        DEMO_PROJECT_ID,
+        { title: 'Revisão WIP 2', columnId: DEMO_COLUMN_IDS.REVIEW },
+      );
 
       const primaryNav = screen.getByRole('navigation', {
         name: ptBRMessages['nav.primaryLabel'],
@@ -125,24 +145,55 @@ describe('Focus Mode, Workload, Bottlenecks & DN-06 Settings Presentation + Rout
       expect(screen.getByRole('progressbar')).toBeInTheDocument();
       expect(await axe(container)).toHaveNoViolations();
 
-      // Fixar e reordenar por teclado
-      const pinButtons = screen.getAllByRole('button', { name: ptBRMessages['focus.actions.pin'] });
-      expect(pinButtons.length).toBeGreaterThan(0);
-      await user.click(pinButtons[0]!);
-      await screen.findByText(ptBRMessages['focus.actions.pinnedBadge']);
-
+      // Reordenar por teclado (Descer e Subir) com >= 2 tarefas não fixadas
       const moveDownButtons = screen.getAllByRole('button', {
         name: ptBRMessages['focus.actions.moveDown'],
       });
       const enabledMoveDown = moveDownButtons.find((btn) => !btn.hasAttribute('disabled'));
-      if (enabledMoveDown !== undefined) {
-        await user.click(enabledMoveDown);
-        await screen.findByText(ptBRMessages['focus.mode.MANUAL']);
-      }
+      expect(enabledMoveDown).toBeDefined();
+      enabledMoveDown!.focus();
+      await user.keyboard('{Enter}');
+      await screen.findByText(ptBRMessages['focus.mode.MANUAL']);
 
-      // Resetar preferências via ModalDialog
+      const moveUpButtons = screen.getAllByRole('button', {
+        name: ptBRMessages['focus.actions.moveUp'],
+      });
+      const enabledMoveUp = moveUpButtons.find((btn) => !btn.hasAttribute('disabled'));
+      expect(enabledMoveUp).toBeDefined();
+      enabledMoveUp!.focus();
+      await user.keyboard('{Enter}');
+      await waitFor(() => {
+        expect(
+          screen.getByRole('status', { name: ptBRMessages['focus.liveRegionLabel'] }),
+        ).toHaveTextContent(/movida para a posição 1/);
+      });
+
+      // Fixar, desfixar, ocultar e restaurar no Modo Foco
+      const pinButtons = screen.getAllByRole('button', { name: ptBRMessages['focus.actions.pin'] });
+      expect(pinButtons.length).toBeGreaterThan(0);
+      await user.click(pinButtons[0]!);
+      await screen.findByText(ptBRMessages['focus.actions.pinnedBadge']);
+      await user.click(screen.getByRole('button', { name: ptBRMessages['focus.actions.unpin'] }));
+      await waitFor(() => {
+        expect(
+          screen.queryByText(ptBRMessages['focus.actions.pinnedBadge']),
+        ).not.toBeInTheDocument();
+      });
+
+      const hideButtons = screen.getAllByRole('button', {
+        name: ptBRMessages['focus.actions.hide'],
+      });
+      await user.click(hideButtons[0]!);
+      await screen.findByText('Tarefas ocultas (1)');
+      await user.click(
+        screen.getByRole('button', { name: ptBRMessages['focus.actions.restoreHidden'] }),
+      );
+      await screen.findByText('Tarefas ocultas (0)');
+
+      // Resetar preferências via ModalDialog (auditado aberto com vitest-axe)
       await user.click(screen.getByRole('button', { name: ptBRMessages['focus.resetAction'] }));
       const resetDialog = await screen.findByRole('dialog');
+      expect(await axe(container)).toHaveNoViolations();
       await user.click(
         within(resetDialog).getByRole('button', { name: ptBRMessages['common.confirm'] }),
       );
@@ -176,37 +227,54 @@ describe('Focus Mode, Workload, Bottlenecks & DN-06 Settings Presentation + Rout
       );
       expect(await screen.findAllByText(/Análise concluída:/)).not.toHaveLength(0);
 
-      const acknowledgeButtons = screen.queryAllByRole('button', {
+      const acknowledgeButtons = screen.getAllByRole('button', {
         name: ptBRMessages['bottlenecks.actions.acknowledge'],
       });
-      if (acknowledgeButtons.length > 0) {
-        await user.click(acknowledgeButtons[0]!);
-        const ackDialog = await screen.findByRole('dialog');
-        await user.click(
-          within(ackDialog).getByRole('button', {
-            name: ptBRMessages['bottlenecks.actions.confirmAcknowledge'],
-          }),
-        );
-        expect(
-          await screen.findAllByText(ptBRMessages['bottlenecks.actions.acknowledgeSuccess']),
-        ).not.toHaveLength(0);
+      expect(acknowledgeButtons.length).toBeGreaterThan(0);
+      await user.click(acknowledgeButtons[0]!);
+      const ackDialog = await screen.findByRole('dialog');
+      expect(await axe(container)).toHaveNoViolations();
+      await user.click(
+        within(ackDialog).getByRole('button', {
+          name: ptBRMessages['bottlenecks.actions.confirmAcknowledge'],
+        }),
+      );
+      expect(
+        await screen.findAllByText(ptBRMessages['bottlenecks.actions.acknowledgeSuccess']),
+      ).not.toHaveLength(0);
 
-        const resolveButtons = screen.getAllByRole('button', {
-          name: ptBRMessages['bottlenecks.actions.resolve'],
-        });
-        await user.click(resolveButtons[0]!);
-        const resolveDialog = await screen.findByRole('dialog');
-        await user.click(
-          within(resolveDialog).getByRole('button', {
-            name: ptBRMessages['bottlenecks.actions.confirmResolve'],
-          }),
-        );
-        expect(
-          await screen.findAllByText(ptBRMessages['bottlenecks.actions.resolveSuccess']),
-        ).not.toHaveLength(0);
-      }
+      const resolveButtons = screen.getAllByRole('button', {
+        name: ptBRMessages['bottlenecks.actions.resolve'],
+      });
+      await user.click(resolveButtons[0]!);
+      const resolveDialog = await screen.findByRole('dialog');
+      expect(await axe(container)).toHaveNoViolations();
+      await user.click(
+        within(resolveDialog).getByRole('button', {
+          name: ptBRMessages['bottlenecks.actions.confirmResolve'],
+        }),
+      );
+      expect(
+        await screen.findAllByText(ptBRMessages['bottlenecks.actions.resolveSuccess']),
+      ).not.toHaveLength(0);
 
-      // Atualiza regras de gargalo
+      // Validação de limiares invertidos (warning > critical) -> invalidRangeError + axe
+      const overdueWarnInput = screen.getByRole<HTMLInputElement>('spinbutton', {
+        name: ptBRMessages['bottlenecks.rules.overdueWarningCountLabel'],
+      });
+      await user.clear(overdueWarnInput);
+      await user.type(overdueWarnInput, '10');
+      await user.click(
+        screen.getByRole('button', { name: ptBRMessages['bottlenecks.rules.saveAction'] }),
+      );
+      expect(
+        await screen.findByText(ptBRMessages['bottlenecks.rules.invalidRangeError']),
+      ).toBeInTheDocument();
+      expect(await axe(container)).toHaveNoViolations();
+
+      // Corrige warning e atualiza regras válidas de gargalo
+      await user.clear(overdueWarnInput);
+      await user.type(overdueWarnInput, '1');
       const thresholdInput = screen.getByRole<HTMLInputElement>('spinbutton', {
         name: ptBRMessages['bottlenecks.rules.wipUtilizationPercentLabel'],
       });
@@ -239,11 +307,11 @@ describe('Focus Mode, Workload, Bottlenecks & DN-06 Settings Presentation + Rout
   );
 
   it(
-    'respeita Default Deny (DN-02) para MANAGER e MEMBER em /bottlenecks e /projects/:id/bottlenecks sem expor carga individual de terceiros',
-    { timeout: 25_000 },
+    'exibe seção de bloqueadas no Modo Foco (OPEN_IMPEDIMENT, PENDING_DEPENDENCY e PAUSED), restaurar todas ocultas e respeita Default Deny vs liberação ADMIN para MANAGER + modo read-only em projeto arquivado',
+    { timeout: 35_000 },
     async () => {
       const user = userEvent.setup();
-      const { container, router } = await renderIsolatedApp('/demo');
+      const { container, appContainer, router } = await renderIsolatedApp('/demo');
 
       await screen.findByRole('heading', { level: 1, name: ptBRMessages['auth.demo.title'] });
       await user.click(screen.getByRole('button', { name: 'Entrar como Gestor' }));
@@ -252,6 +320,89 @@ describe('Focus Mode, Workload, Bottlenecks & DN-06 Settings Presentation + Rout
         name: ptBRMessages['organizations.title'],
       });
 
+      // Cria tarefas bloqueadas (impedimento, dependência e pausa) e ocultáveis
+      const pausedTask = await appContainer.services.tasks.createTask(
+        DEMO_MANAGER_USER_ID,
+        DEMO_ORG_ID,
+        DEMO_PROJECT_ID,
+        {
+          title: 'Tarefa Pausada UI Foco',
+          priority: PRIORITIES.HIGH,
+          assigneeId: DEMO_MANAGER_USER_ID,
+        },
+      );
+      await appContainer.services.tasks.startTask(DEMO_MANAGER_USER_ID, DEMO_ORG_ID, pausedTask.id);
+      await appContainer.services.tasks.pauseTask(
+        DEMO_MANAGER_USER_ID,
+        DEMO_ORG_ID,
+        pausedTask.id,
+        { reason: 'Pausa aguardando retorno' },
+      );
+
+      const impededTask = await appContainer.services.tasks.createTask(
+        DEMO_MANAGER_USER_ID,
+        DEMO_ORG_ID,
+        DEMO_PROJECT_ID,
+        {
+          title: 'Tarefa Impedida UI Foco',
+          priority: PRIORITIES.HIGH,
+          assigneeId: DEMO_MANAGER_USER_ID,
+        },
+      );
+      await appContainer.services.impediments.createImpediment(
+        DEMO_MANAGER_USER_ID,
+        DEMO_ORG_ID,
+        impededTask.id,
+        {
+          category: IMPEDIMENT_CATEGORIES.TECHNICAL_ISSUE,
+          severity: IMPEDIMENT_SEVERITIES.HIGH,
+          description: 'Build quebrado na pipeline',
+        },
+      );
+
+      const prereqTask = await appContainer.services.tasks.createTask(
+        DEMO_MANAGER_USER_ID,
+        DEMO_ORG_ID,
+        DEMO_PROJECT_ID,
+        { title: 'Tarefa Predecessora UI Foco', assigneeId: DEMO_MANAGER_USER_ID },
+      );
+      const dependentTask = await appContainer.services.tasks.createTask(
+        DEMO_MANAGER_USER_ID,
+        DEMO_ORG_ID,
+        DEMO_PROJECT_ID,
+        { title: 'Tarefa Dependente UI Foco', assigneeId: DEMO_MANAGER_USER_ID },
+      );
+      await appContainer.services.dependencies.addDependency(
+        DEMO_MANAGER_USER_ID,
+        DEMO_ORG_ID,
+        dependentTask.id,
+        { dependsOnTaskId: prereqTask.id, required: true },
+      );
+
+      // Verifica seção de bloqueadas e restaurar todas as ocultas em /focus
+      await router.navigate('/focus');
+      await screen.findByText('Tarefas bloqueadas ou pausadas (3)');
+      expect(screen.getByText(ptBRMessages['focus.blocked.reasonCode.PAUSED'])).toBeInTheDocument();
+      expect(
+        screen.getByText(ptBRMessages['focus.blocked.reasonCode.OPEN_IMPEDIMENT']),
+      ).toBeInTheDocument();
+      expect(
+        screen.getByText(ptBRMessages['focus.blocked.reasonCode.PENDING_DEPENDENCY']),
+      ).toBeInTheDocument();
+      expect(screen.getAllByText(/Condição de desbloqueio:/).length).toBeGreaterThanOrEqual(3);
+
+      const hideButtons = screen.getAllByRole('button', {
+        name: ptBRMessages['focus.actions.hide'],
+      });
+      await user.click(hideButtons[0]!);
+      await screen.findByText('Tarefas ocultas (1)');
+      await user.click(
+        screen.getByRole('button', { name: ptBRMessages['focus.actions.restoreAllHidden'] }),
+      );
+      await screen.findByText('Tarefas ocultas (0)');
+      expect(await axe(container)).toHaveNoViolations();
+
+      // MANAGER sob Default Deny: /projects/:id/bottlenecks anonimizado e /settings sem toggle
       await router.navigate(`/projects/${DEMO_PROJECT_ID}/bottlenecks`);
       await screen.findByText(ptBRMessages['bottlenecks.privacy.anonymizedNotice']);
       expect(screen.queryByText(ptBRMessages['bottlenecks.members.title'])).not.toBeInTheDocument();
@@ -265,6 +416,59 @@ describe('Focus Mode, Workload, Bottlenecks & DN-06 Settings Presentation + Rout
         name: ptBRMessages['bottlenecks.org.title'],
       });
       expect(orgHeading).toHaveAttribute('tabindex', '-1');
+      expect(await axe(container)).toHaveNoViolations();
+
+      await router.navigate('/settings');
+      await screen.findByText(ptBRMessages['settings.productivityVisibility.adminOnlyNotice']);
+      expect(
+        screen.queryByRole('checkbox', {
+          name: ptBRMessages['settings.productivityVisibility.toggleLabel'],
+        }),
+      ).not.toBeInTheDocument();
+      expect(await axe(container)).toHaveNoViolations();
+
+      // ADMIN habilita visibilidade individual -> MANAGER passa a ver carga individual dos membros
+      await appContainer.services.bottlenecks.updateIndividualProductivityVisibility(
+        DEMO_ADMIN_USER_ID,
+        DEMO_ORG_ID,
+        { allowManagerViewIndividualProductivity: true },
+      );
+      await router.navigate(`/projects/${DEMO_PROJECT_ID}/bottlenecks`);
+      await screen.findByRole('heading', {
+        level: 2,
+        name: ptBRMessages['bottlenecks.members.title'],
+      });
+      expect(
+        screen.queryByText(ptBRMessages['bottlenecks.privacy.anonymizedNotice']),
+      ).not.toBeInTheDocument();
+      expect(await axe(container)).toHaveNoViolations();
+
+      // Projeto arquivado -> modo somente leitura em /projects/:id/bottlenecks
+      await appContainer.services.projects.archiveProject(
+        DEMO_ADMIN_USER_ID,
+        DEMO_ORG_ID,
+        DEMO_PROJECT_ID,
+      );
+      await router.navigate('/bottlenecks');
+      await screen.findByRole('heading', {
+        level: 1,
+        name: ptBRMessages['bottlenecks.org.title'],
+      });
+      await router.navigate(`/projects/${DEMO_PROJECT_ID}/bottlenecks`);
+      expect(
+        await screen.findAllByText(ptBRMessages['bottlenecks.archivedLockBanner']),
+      ).not.toHaveLength(0);
+      expect(
+        screen.queryByRole('button', { name: ptBRMessages['bottlenecks.actions.evaluateNow'] }),
+      ).not.toBeInTheDocument();
+      expect(
+        screen.getByRole('button', { name: ptBRMessages['bottlenecks.rules.saveAction'] }),
+      ).toBeDisabled();
+      expect(
+        screen.getByRole('spinbutton', {
+          name: ptBRMessages['bottlenecks.rules.wipUtilizationPercentLabel'],
+        }),
+      ).toBeDisabled();
       expect(await axe(container)).toHaveNoViolations();
     },
   );

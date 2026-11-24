@@ -19,13 +19,15 @@ import { IMPEDIMENT_CATEGORIES } from '@/modules/impediments';
 import { asOrganizationMemberId } from '@/modules/organizations';
 import { PROJECT_MEMBER_ROLES, type Project } from '@/modules/projects';
 import type { Task } from '@/modules/tasks';
-import { AuthorizationError, ConflictError, ValidationError } from '@/shared/errors';
+import { AuthorizationError, ConflictError, NotFoundError, ValidationError } from '@/shared/errors';
 import {
   BOTTLENECK_SEVERITIES,
   IMPEDIMENT_SEVERITIES,
   PRIORITIES,
   asIsoDateTime,
   asOrganizationId,
+  asProjectId,
+  asTaskId,
   asUserId,
   type DomainEventEnvelope,
   type ProjectId,
@@ -639,5 +641,333 @@ describe('Phase 08 — FocusService, BottleneckService, Repository Complements &
     );
     expect(archivedOverview.project.status).toBe('ARCHIVED');
     expect((archivedOverview.project as Project | { id: ProjectId }).id).toBe(DEMO_PROJECT_ID);
+  });
+
+  it('cobre todas as rotas §11 restantes, query params, códigos HTTP 200/403/404/409/422 e isolamento cross-org completo', async () => {
+    const member2 = await seedSecondMemberInDemoProject();
+    const secondProject = await container.services.projects.createProject(
+      DEMO_ADMIN_USER_ID,
+      DEMO_ORG_ID,
+      { name: 'Projeto Secundario MSW', ownerUserId: DEMO_MANAGER_USER_ID },
+    );
+
+    const taskMember1 = await createTaskViaApi(DEMO_MANAGER_USER_ID, DEMO_PROJECT_ID, {
+      title: 'Tarefa Foco Membro 1',
+      assigneeId: DEMO_MEMBER_USER_ID,
+      dueDate: OVERDUE_DATE,
+    });
+    const taskMember2 = await createTaskViaApi(DEMO_MANAGER_USER_ID, DEMO_PROJECT_ID, {
+      title: 'Tarefa Foco Membro 2',
+      assigneeId: member2,
+      dueDate: OVERDUE_DATE,
+    });
+    await createTaskViaApi(DEMO_MANAGER_USER_ID, secondProject.id, {
+      title: 'Tarefa Projeto Secundario',
+      assigneeId: DEMO_MANAGER_USER_ID,
+    });
+
+    // 1. Query params on GET .../focus (?projectId=...&onlyMyTasks=true)
+    const filteredFocus = await container.httpClient.get<MyFocusView>(
+      `/organizations/${DEMO_ORG_ID}/focus?projectId=${DEMO_PROJECT_ID}&onlyMyTasks=true`,
+      { actorUserId: DEMO_MEMBER_USER_ID },
+    );
+    expect(
+      filteredFocus.ranking.actionableTasks.every(
+        (item) => item.candidate.projectId === DEMO_PROJECT_ID,
+      ),
+    ).toBe(true);
+    expect(
+      filteredFocus.ranking.actionableTasks.some((t) => t.candidate.taskId === taskMember1.id),
+    ).toBe(true);
+    expect(
+      filteredFocus.ranking.actionableTasks.some((t) => t.candidate.taskId === taskMember2.id),
+    ).toBe(false);
+
+    // 2. GET .../settings/productivity-visibility (200 ADMIN, 403 MANAGER/MEMBER)
+    const initialVisibility =
+      await container.httpClient.get<IndividualProductivityVisibilityResult>(
+        `/organizations/${DEMO_ORG_ID}/settings/productivity-visibility`,
+        { actorUserId: DEMO_ADMIN_USER_ID },
+      );
+    expect(initialVisibility.allowManagerViewIndividualProductivity).toBe(false);
+
+    await expect(
+      container.httpClient.get(`/organizations/${DEMO_ORG_ID}/settings/productivity-visibility`, {
+        actorUserId: DEMO_MANAGER_USER_ID,
+      }),
+    ).rejects.toThrow(AuthorizationError);
+    await expect(
+      container.httpClient.get(`/organizations/${DEMO_ORG_ID}/settings/productivity-visibility`, {
+        actorUserId: DEMO_MEMBER_USER_ID,
+      }),
+    ).rejects.toThrow(AuthorizationError);
+
+    // 3. Evaluate & query params on GET .../bottlenecks (?projectId&indicator&status&includeResolved)
+    const evalResult = await container.httpClient.post<EvaluateProjectBottlenecksResult>(
+      `/organizations/${DEMO_ORG_ID}/projects/${DEMO_PROJECT_ID}/bottlenecks/evaluate`,
+      {},
+      { actorUserId: DEMO_ADMIN_USER_ID },
+    );
+    const overdueAlert = evalResult.alerts.find(
+      (a) => a.indicator === BOTTLENECK_INDICATORS.OVERDUE,
+    )!;
+    await container.httpClient.post<BottleneckAlert>(
+      `/organizations/${DEMO_ORG_ID}/bottlenecks/${overdueAlert.id}/resolve`,
+      {},
+      { actorUserId: DEMO_ADMIN_USER_ID },
+    );
+
+    const resolvedFiltered = await container.httpClient.get<OrganizationBottleneckAlertsResult>(
+      `/organizations/${DEMO_ORG_ID}/bottlenecks?projectId=${DEMO_PROJECT_ID}&indicator=OVERDUE&status=RESOLVED&includeResolved=true`,
+      { actorUserId: DEMO_ADMIN_USER_ID },
+    );
+    expect(resolvedFiltered.alerts).toHaveLength(1);
+    expect(resolvedFiltered.alerts[0]?.id).toBe(overdueAlert.id);
+    expect(resolvedFiltered.alerts[0]?.status).toBe(BOTTLENECK_ALERT_STATUSES.RESOLVED);
+
+    // 4. HTTP status codes 200 / 403 / 404 / 409 / 422 verified directly over MSW HTTP transport
+    const missingProjectId = asProjectId('99999999-9999-4999-8999-999999999988');
+    const missingTaskId = asTaskId('99999999-9999-4999-8999-999999999977');
+    const missingAlertId = asBottleneckAlertId('99999999-9999-4999-8999-999999999966');
+
+    const res200 = await fetch(
+      `http://localhost/api/v1/organizations/${DEMO_ORG_ID}/settings/productivity-visibility`,
+      {
+        method: 'GET',
+        headers: { 'x-actor-user-id': DEMO_ADMIN_USER_ID },
+      },
+    );
+    expect(res200.status).toBe(200);
+
+    const res403FocusPin = await fetch(
+      `http://localhost/api/v1/organizations/${DEMO_ORG_ID}/focus/preferences`,
+      {
+        method: 'PUT',
+        headers: {
+          'content-type': 'application/json',
+          'x-actor-user-id': DEMO_MEMBER_USER_ID,
+        },
+        body: JSON.stringify({ pinnedTaskIds: [taskMember2.id] }),
+      },
+    );
+    expect(res403FocusPin.status).toBe(403);
+
+    const res404FocusTask = await fetch(
+      `http://localhost/api/v1/organizations/${DEMO_ORG_ID}/focus/preferences`,
+      {
+        method: 'PUT',
+        headers: {
+          'content-type': 'application/json',
+          'x-actor-user-id': DEMO_MEMBER_USER_ID,
+        },
+        body: JSON.stringify({ pinnedTaskIds: [missingTaskId] }),
+      },
+    );
+    expect(res404FocusTask.status).toBe(404);
+
+    const res422FocusEmpty = await fetch(
+      `http://localhost/api/v1/organizations/${DEMO_ORG_ID}/focus/preferences`,
+      {
+        method: 'PUT',
+        headers: {
+          'content-type': 'application/json',
+          'x-actor-user-id': DEMO_MEMBER_USER_ID,
+        },
+        body: JSON.stringify({}),
+      },
+    );
+    expect(res422FocusEmpty.status).toBe(422);
+
+    const res404Overview = await fetch(
+      `http://localhost/api/v1/organizations/${DEMO_ORG_ID}/projects/${missingProjectId}/bottlenecks`,
+      {
+        method: 'GET',
+        headers: { 'x-actor-user-id': DEMO_ADMIN_USER_ID },
+      },
+    );
+    expect(res404Overview.status).toBe(404);
+
+    const res404Ack = await fetch(
+      `http://localhost/api/v1/organizations/${DEMO_ORG_ID}/bottlenecks/${missingAlertId}/acknowledge`,
+      {
+        method: 'POST',
+        headers: { 'x-actor-user-id': DEMO_ADMIN_USER_ID },
+      },
+    );
+    expect(res404Ack.status).toBe(404);
+
+    const res409AlreadyResolved = await fetch(
+      `http://localhost/api/v1/organizations/${DEMO_ORG_ID}/bottlenecks/${overdueAlert.id}/resolve`,
+      {
+        method: 'POST',
+        headers: { 'x-actor-user-id': DEMO_ADMIN_USER_ID },
+      },
+    );
+    expect(res409AlreadyResolved.status).toBe(409);
+
+    const res422Visibility = await fetch(
+      `http://localhost/api/v1/organizations/${DEMO_ORG_ID}/settings/productivity-visibility`,
+      {
+        method: 'PATCH',
+        headers: {
+          'content-type': 'application/json',
+          'x-actor-user-id': DEMO_ADMIN_USER_ID,
+        },
+        body: JSON.stringify({}),
+      },
+    );
+    expect(res422Visibility.status).toBe(422);
+
+    // 5. Archived project returns 409 Conflict for thresholds, acknowledge and resolve too
+    const evalSecond = await container.httpClient.post<EvaluateProjectBottlenecksResult>(
+      `/organizations/${DEMO_ORG_ID}/projects/${DEMO_PROJECT_ID}/bottlenecks/evaluate`,
+      {},
+      { actorUserId: DEMO_ADMIN_USER_ID },
+    );
+    const activeAlertId = evalSecond.alerts[0]!.id;
+    await container.services.projects.archiveProject(
+      DEMO_ADMIN_USER_ID,
+      DEMO_ORG_ID,
+      DEMO_PROJECT_ID,
+    );
+
+    await expect(
+      container.httpClient.patch<ProjectBottleneckRulesResult>(
+        `/organizations/${DEMO_ORG_ID}/projects/${DEMO_PROJECT_ID}/bottlenecks/thresholds`,
+        { inactivityThresholdDays: 10 },
+        { actorUserId: DEMO_ADMIN_USER_ID },
+      ),
+    ).rejects.toThrow(ConflictError);
+
+    await expect(
+      container.httpClient.post<BottleneckAlert>(
+        `/organizations/${DEMO_ORG_ID}/bottlenecks/${activeAlertId}/acknowledge`,
+        {},
+        { actorUserId: DEMO_ADMIN_USER_ID },
+      ),
+    ).rejects.toThrow(ConflictError);
+
+    await expect(
+      container.httpClient.post<BottleneckAlert>(
+        `/organizations/${DEMO_ORG_ID}/bottlenecks/${activeAlertId}/resolve`,
+        {},
+        { actorUserId: DEMO_ADMIN_USER_ID },
+      ),
+    ).rejects.toThrow(ConflictError);
+
+    // Also verify typed NotFoundError & ValidationError via httpClient
+    await expect(
+      container.httpClient.post(
+        `/organizations/${DEMO_ORG_ID}/bottlenecks/${missingAlertId}/resolve`,
+        {},
+        { actorUserId: DEMO_ADMIN_USER_ID },
+      ),
+    ).rejects.toThrow(NotFoundError);
+    await expect(
+      container.httpClient.put<FocusPreference>(
+        `/organizations/${DEMO_ORG_ID}/focus/preferences`,
+        {},
+        { actorUserId: DEMO_MEMBER_USER_ID },
+      ),
+    ).rejects.toThrow(ValidationError);
+
+    // 6. Complete cross-org isolation across ALL §11 endpoints
+    const { organization: orgB } = await container.services.organizations.createOrganization(
+      DEMO_ADMIN_USER_ID,
+      { name: 'Org B Isolamento Total', slug: 'org-b-isolamento-total' },
+    );
+    const orgBProject = await container.services.projects.createProject(
+      DEMO_ADMIN_USER_ID,
+      orgB.id,
+      { name: 'Projeto Org B', ownerUserId: DEMO_ADMIN_USER_ID },
+    );
+    await container.httpClient.post(
+      `/organizations/${orgB.id}/projects/${orgBProject.id}/tasks`,
+      { title: 'Tarefa Atrasada Org B', dueDate: OVERDUE_DATE },
+      { actorUserId: DEMO_ADMIN_USER_ID },
+    );
+    const orgBEval = await container.httpClient.post<EvaluateProjectBottlenecksResult>(
+      `/organizations/${orgB.id}/projects/${orgBProject.id}/bottlenecks/evaluate`,
+      {},
+      { actorUserId: DEMO_ADMIN_USER_ID },
+    );
+    const orgBAlertId = orgBEval.alerts[0]!.id;
+
+    await expect(
+      container.httpClient.get(`/organizations/${orgB.id}/focus`, {
+        actorUserId: DEMO_MEMBER_USER_ID,
+      }),
+    ).rejects.toThrow(AuthorizationError);
+    await expect(
+      container.httpClient.put(
+        `/organizations/${orgB.id}/focus/preferences`,
+        { mode: FOCUS_MODES.MANUAL },
+        { actorUserId: DEMO_MEMBER_USER_ID },
+      ),
+    ).rejects.toThrow(AuthorizationError);
+    await expect(
+      container.httpClient.post(
+        `/organizations/${orgB.id}/focus/preferences/reset`,
+        {},
+        { actorUserId: DEMO_MEMBER_USER_ID },
+      ),
+    ).rejects.toThrow(AuthorizationError);
+    await expect(
+      container.httpClient.get(`/organizations/${orgB.id}/bottlenecks`, {
+        actorUserId: DEMO_MEMBER_USER_ID,
+      }),
+    ).rejects.toThrow(AuthorizationError);
+    await expect(
+      container.httpClient.get(`/organizations/${orgB.id}/projects/${orgBProject.id}/bottlenecks`, {
+        actorUserId: DEMO_MEMBER_USER_ID,
+      }),
+    ).rejects.toThrow(AuthorizationError);
+    await expect(
+      container.httpClient.post(
+        `/organizations/${orgB.id}/projects/${orgBProject.id}/bottlenecks/evaluate`,
+        {},
+        { actorUserId: DEMO_MEMBER_USER_ID },
+      ),
+    ).rejects.toThrow(AuthorizationError);
+    await expect(
+      container.httpClient.patch(
+        `/organizations/${orgB.id}/projects/${orgBProject.id}/bottlenecks/thresholds`,
+        { inactivityThresholdDays: 5 },
+        { actorUserId: DEMO_MEMBER_USER_ID },
+      ),
+    ).rejects.toThrow(AuthorizationError);
+    await expect(
+      container.httpClient.post(
+        `/organizations/${orgB.id}/bottlenecks/${orgBAlertId}/acknowledge`,
+        {},
+        { actorUserId: DEMO_MEMBER_USER_ID },
+      ),
+    ).rejects.toThrow(AuthorizationError);
+    await expect(
+      container.httpClient.post(
+        `/organizations/${orgB.id}/bottlenecks/${orgBAlertId}/resolve`,
+        {},
+        { actorUserId: DEMO_MEMBER_USER_ID },
+      ),
+    ).rejects.toThrow(AuthorizationError);
+    await expect(
+      container.httpClient.get(`/organizations/${orgB.id}/settings/productivity-visibility`, {
+        actorUserId: DEMO_MEMBER_USER_ID,
+      }),
+    ).rejects.toThrow(AuthorizationError);
+    await expect(
+      container.httpClient.patch(
+        `/organizations/${orgB.id}/settings/productivity-visibility`,
+        { allowManagerViewIndividualProductivity: true },
+        { actorUserId: DEMO_MEMBER_USER_ID },
+      ),
+    ).rejects.toThrow(AuthorizationError);
+    // Non-disclosure when referencing Org A projectId inside Org B URL
+    await expect(
+      container.httpClient.get(
+        `/organizations/${orgB.id}/projects/${DEMO_PROJECT_ID}/bottlenecks`,
+        { actorUserId: DEMO_MEMBER_USER_ID },
+      ),
+    ).rejects.toThrow(NotFoundError);
   });
 });
