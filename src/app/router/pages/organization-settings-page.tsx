@@ -10,9 +10,20 @@ import {
   type OrganizationSettingsFeedback,
   type UpdateOrganizationFormValues,
 } from '@/modules/organizations/presentation/organization-settings-panel';
+import {
+  createDefaultOrganizationSettings,
+  toAuthorizationPolicyConfig,
+  type OrganizationSettings,
+} from '@/modules/settings';
 import { APP_ERROR_CODES, isAppError } from '@/shared/errors';
 import { getErrorMessageId, type MessageId } from '@/shared/i18n';
-import { MEMBERSHIP_STATUSES, type OrganizationRole, type UserId } from '@/shared/kernel';
+import {
+  MEMBERSHIP_STATUSES,
+  asEntityId,
+  asIsoDateTime,
+  type OrganizationRole,
+  type UserId,
+} from '@/shared/kernel';
 import { Button, Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/shared/ui';
 
 const ROLE_LABEL_ID_BY_CODE: Readonly<Record<OrganizationRole, MessageId>> = {
@@ -25,17 +36,21 @@ interface LoadedOrgData {
   readonly orgId: string | null;
   readonly details: Organization | null;
   readonly members: readonly OrganizationMemberDetails[];
+  readonly settings: OrganizationSettings | null;
+  readonly allowManagerViewIndividualProductivity: boolean;
 }
 
 const INITIAL_LOADED_DATA: LoadedOrgData = {
   orgId: null,
   details: null,
   members: [],
+  settings: null,
+  allowManagerViewIndividualProductivity: false,
 };
 
 export function OrganizationSettingsPage() {
   const intl = useIntl();
-  const { services } = useComposition();
+  const { services, repositories } = useComposition();
   const { user } = useAuth();
   const { activeOrganization, refreshOrganizations } = useOrganization();
   const { can } = usePermission();
@@ -43,12 +58,16 @@ export function OrganizationSettingsPage() {
   const [loadedData, setLoadedData] = useState<LoadedOrgData>(INITIAL_LOADED_DATA);
   const [detailsFeedback, setDetailsFeedback] = useState<OrganizationSettingsFeedback | null>(null);
   const [membersFeedback, setMembersFeedback] = useState<OrganizationSettingsFeedback | null>(null);
+  const [visibilityFeedback, setVisibilityFeedback] = useState<OrganizationSettingsFeedback | null>(
+    null,
+  );
 
   const canViewDetails = can(PERMISSION_CODES.ORGANIZATION_VIEW);
   const canUpdateDetails = can(PERMISSION_CODES.ORGANIZATION_UPDATE);
   const canViewMembers = can(PERMISSION_CODES.ORGANIZATION_MEMBERS_VIEW);
   const canManageRoles = can(PERMISSION_CODES.ORGANIZATION_ROLES_MANAGE);
   const canManageMembers = can(PERMISSION_CODES.ORGANIZATION_MEMBERS_MANAGE);
+  const canCheckVisibilitySettings = can(PERMISSION_CODES.ORGANIZATION_SETTINGS_MANAGE);
 
   useEffect(() => {
     if (user === null || activeOrganization === null) {
@@ -60,25 +79,45 @@ export function OrganizationSettingsPage() {
     const targetOrgId = activeOrganization.id;
 
     async function loadOrganizationData() {
-      const [detailsResult, membersResult] = await Promise.all([
-        canViewDetails
-          ? services.organizations
-              .getOrganizationDetails(actorUserId, targetOrgId)
-              .catch(() => null)
-          : Promise.resolve(null),
-        canViewMembers
-          ? services.organizations.listOrganizationMembers(actorUserId, targetOrgId).catch(() => [])
-          : Promise.resolve([]),
-      ]);
+      const [detailsResult, membersResult, persistedSettings, visibilityResult] = await Promise.all(
+        [
+          canViewDetails
+            ? services.organizations
+                .getOrganizationDetails(actorUserId, targetOrgId)
+                .catch(() => null)
+            : Promise.resolve(null),
+          canViewMembers
+            ? services.organizations
+                .listOrganizationMembers(actorUserId, targetOrgId)
+                .catch(() => [])
+            : Promise.resolve([]),
+          repositories.settings.organizationSettings
+            .findByOrganization(targetOrgId)
+            .catch(() => null),
+          canCheckVisibilitySettings
+            ? services.bottlenecks
+                .getIndividualProductivityVisibility(actorUserId, targetOrgId)
+                .catch(() => null)
+            : Promise.resolve(null),
+        ],
+      );
 
       if (!isActive) {
         return;
       }
 
+      const effectiveSettings =
+        persistedSettings ??
+        createDefaultOrganizationSettings(targetOrgId, asIsoDateTime(new Date().toISOString()));
+
       setLoadedData({
         orgId: targetOrgId,
         details: detailsResult,
         members: membersResult,
+        settings: effectiveSettings,
+        allowManagerViewIndividualProductivity:
+          visibilityResult?.allowManagerViewIndividualProductivity ??
+          effectiveSettings.pendingPermissionDefaults.allowManagerViewIndividualProductivity,
       });
     }
 
@@ -87,7 +126,16 @@ export function OrganizationSettingsPage() {
     return () => {
       isActive = false;
     };
-  }, [activeOrganization, canViewDetails, canViewMembers, services.organizations, user]);
+  }, [
+    activeOrganization,
+    canCheckVisibilitySettings,
+    canViewDetails,
+    canViewMembers,
+    repositories.settings.organizationSettings,
+    services.bottlenecks,
+    services.organizations,
+    user,
+  ]);
 
   if (user === null) {
     return null;
@@ -114,6 +162,21 @@ export function OrganizationSettingsPage() {
   const isCurrentOrgLoaded = loadedData.orgId === activeOrganization.id;
   const currentDetails = isCurrentOrgLoaded ? loadedData.details : null;
   const currentMembers = isCurrentOrgLoaded ? loadedData.members : [];
+  const currentPolicyConfig =
+    isCurrentOrgLoaded && loadedData.settings !== null
+      ? toAuthorizationPolicyConfig(loadedData.settings)
+      : undefined;
+  const canManageProductivityVisibility = can(
+    PERMISSION_CODES.ORGANIZATION_SETTINGS_MANAGE,
+    {
+      kind: 'ORGANIZATION',
+      id: asEntityId(activeOrganization.id),
+      exists: true,
+      organizationId: activeOrganization.id,
+      ...(currentDetails?.deletedAt !== undefined ? { deletedAt: currentDetails.deletedAt } : {}),
+    },
+    currentPolicyConfig,
+  );
 
   const handleUpdateOrganization = async (values: UpdateOrganizationFormValues) => {
     setDetailsFeedback(null);
@@ -247,6 +310,41 @@ export function OrganizationSettingsPage() {
     }
   };
 
+  const handleUpdateProductivityVisibility = async (input: {
+    readonly allowManagerViewIndividualProductivity: boolean;
+    readonly justification?: string;
+  }) => {
+    setVisibilityFeedback(null);
+    try {
+      const updated = await services.bottlenecks.updateIndividualProductivityVisibility(
+        user.id,
+        activeOrganization.id,
+        input,
+      );
+      const persistedSettings = await repositories.settings.organizationSettings
+        .findByOrganization(activeOrganization.id)
+        .catch(() => loadedData.settings);
+      setLoadedData((current) => ({
+        ...current,
+        orgId: activeOrganization.id,
+        settings: persistedSettings,
+        allowManagerViewIndividualProductivity: updated.allowManagerViewIndividualProductivity,
+      }));
+      setVisibilityFeedback({
+        type: 'success',
+        message: intl.formatMessage({ id: 'settings.productivityVisibility.saveSuccess' }),
+      });
+    } catch (error) {
+      const messageId = isAppError(error)
+        ? getErrorMessageId(error.code)
+        : 'errors.UNEXPECTED_ERROR';
+      setVisibilityFeedback({
+        type: 'destructive',
+        message: intl.formatMessage({ id: messageId }),
+      });
+    }
+  };
+
   return (
     <OrganizationSettingsPanel
       organizationName={currentDetails?.name ?? activeOrganization.name}
@@ -262,14 +360,21 @@ export function OrganizationSettingsPage() {
       canViewMembers={canViewMembers}
       canManageRoles={canManageRoles}
       canManageMembers={canManageMembers}
+      canManageProductivityVisibility={canManageProductivityVisibility}
+      allowManagerViewIndividualProductivity={
+        isCurrentOrgLoaded ? loadedData.allowManagerViewIndividualProductivity : false
+      }
       members={currentMembers}
       isLoadingDetails={canViewDetails && !isCurrentOrgLoaded}
       isLoadingMembers={canViewMembers && !isCurrentOrgLoaded}
+      isLoadingProductivityVisibility={canManageProductivityVisibility && !isCurrentOrgLoaded}
       detailsFeedback={detailsFeedback}
       membersFeedback={membersFeedback}
+      productivityVisibilityFeedback={visibilityFeedback}
       onUpdateOrganization={handleUpdateOrganization}
       onChangeMemberRole={handleChangeMemberRole}
       onToggleMemberStatus={handleToggleMemberStatus}
+      onUpdateProductivityVisibility={handleUpdateProductivityVisibility}
     />
   );
 }

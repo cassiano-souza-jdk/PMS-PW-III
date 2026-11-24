@@ -2,7 +2,9 @@ import { createBrowserRouter, type RouteObject } from 'react-router';
 import { AppShell } from '@/app/layout/app-shell';
 import {
   LazyAcceptInvitationPage,
+  LazyBottlenecksPage,
   LazyDemoPage,
+  LazyFocusPage,
   LazyFoundationHomePage,
   LazyInvitationsPage,
   LazyLoginPage,
@@ -72,6 +74,18 @@ export const appRoutes: RouteObject[] = [
           {
             path: 'projects/:projectId/tasks/:taskId',
             element: <LazyTaskDetailPage />,
+          },
+          {
+            path: 'focus',
+            element: <LazyFocusPage />,
+          },
+          {
+            path: 'bottlenecks',
+            element: <LazyBottlenecksPage />,
+          },
+          {
+            path: 'projects/:projectId/bottlenecks',
+            element: <LazyBottlenecksPage />,
           },
           {
             path: 'invitations',
