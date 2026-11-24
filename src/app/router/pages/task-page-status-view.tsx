@@ -61,7 +61,7 @@ export function TaskPageStatusView({
   if (kind === 'loading') {
     return (
       <section aria-labelledby={headingId} className="mx-auto max-w-2xl space-y-4">
-        <h1 id={headingId} className="sr-only">
+        <h1 id={headingId} tabIndex={-1} className="sr-only">
           {headingText}
         </h1>
         <p role="status" aria-live="polite" className="text-sm text-muted-foreground">

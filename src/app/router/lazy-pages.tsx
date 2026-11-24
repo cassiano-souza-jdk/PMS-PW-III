@@ -17,6 +17,8 @@ const ProjectsPage = lazy(() => import('./pages/projects-page'));
 const ProjectBoardPage = lazy(() => import('./pages/project-board-page'));
 const ProjectTasksPage = lazy(() => import('./pages/project-tasks-page'));
 const TaskDetailPage = lazy(() => import('./pages/task-detail-page'));
+const FocusPage = lazy(() => import('./pages/focus-page'));
+const BottlenecksPage = lazy(() => import('./pages/bottlenecks-page'));
 const PermissionsPage = lazy(() => import('./pages/permissions-page'));
 
 export function LazyFoundationHomePage() {
@@ -143,6 +145,22 @@ export function LazyTaskDetailPage() {
   return (
     <RouteSuspense>
       <TaskDetailPage />
+    </RouteSuspense>
+  );
+}
+
+export function LazyFocusPage() {
+  return (
+    <RouteSuspense>
+      <FocusPage />
+    </RouteSuspense>
+  );
+}
+
+export function LazyBottlenecksPage() {
+  return (
+    <RouteSuspense>
+      <BottlenecksPage />
     </RouteSuspense>
   );
 }

@@ -26,6 +26,7 @@ import {
   Label,
 } from '@/shared/ui';
 import type { OrganizationMemberDetails } from '../application/use-cases/organization-service';
+import { ProductivityVisibilityCard } from './productivity-visibility-card';
 
 const updateOrgSchema = z.object({
   name: z.string().trim().min(2, 'validation.displayNameMin').max(120),
@@ -51,17 +52,25 @@ export interface OrganizationSettingsPanelProps {
   readonly canViewMembers: boolean;
   readonly canManageRoles: boolean;
   readonly canManageMembers: boolean;
+  readonly canManageProductivityVisibility?: boolean;
+  readonly allowManagerViewIndividualProductivity?: boolean;
   readonly members: readonly OrganizationMemberDetails[];
   readonly isLoadingDetails: boolean;
   readonly isLoadingMembers: boolean;
+  readonly isLoadingProductivityVisibility?: boolean;
   readonly detailsFeedback?: OrganizationSettingsFeedback | null;
   readonly membersFeedback?: OrganizationSettingsFeedback | null;
+  readonly productivityVisibilityFeedback?: OrganizationSettingsFeedback | null;
   readonly onUpdateOrganization: (values: UpdateOrganizationFormValues) => Promise<void>;
   readonly onChangeMemberRole: (targetUserId: UserId, role: OrganizationRole) => Promise<void>;
   readonly onToggleMemberStatus: (
     targetUserId: UserId,
     nextStatus: 'ACTIVE' | 'SUSPENDED',
   ) => Promise<void>;
+  readonly onUpdateProductivityVisibility?: (input: {
+    readonly allowManagerViewIndividualProductivity: boolean;
+    readonly justification?: string;
+  }) => Promise<void>;
 }
 
 const ROLE_OPTIONS: readonly OrganizationRole[] = [
@@ -94,14 +103,19 @@ export function OrganizationSettingsPanel({
   canViewMembers,
   canManageRoles,
   canManageMembers,
+  canManageProductivityVisibility = false,
+  allowManagerViewIndividualProductivity = false,
   members,
   isLoadingDetails,
   isLoadingMembers,
+  isLoadingProductivityVisibility = false,
   detailsFeedback = null,
   membersFeedback = null,
+  productivityVisibilityFeedback = null,
   onUpdateOrganization,
   onChangeMemberRole,
   onToggleMemberStatus,
+  onUpdateProductivityVisibility,
 }: OrganizationSettingsPanelProps) {
   const intl = useIntl();
   const [busyMemberId, setBusyMemberId] = useState<UserId | null>(null);
@@ -382,6 +396,16 @@ export function OrganizationSettingsPanel({
           )}
         </CardContent>
       </Card>
+
+      {onUpdateProductivityVisibility !== undefined ? (
+        <ProductivityVisibilityCard
+          canManageProductivityVisibility={canManageProductivityVisibility}
+          allowManagerViewIndividualProductivity={allowManagerViewIndividualProductivity}
+          isLoading={isLoadingProductivityVisibility}
+          feedback={productivityVisibilityFeedback}
+          onSave={onUpdateProductivityVisibility}
+        />
+      ) : null}
     </section>
   );
 }
