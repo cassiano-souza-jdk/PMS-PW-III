@@ -494,10 +494,16 @@ function deduplicateTagIds(rawTagIds: readonly string[]): TagId[] {
 function resolveTaskReadAction(
   task: Task | null,
   project: TaskProjectSummary | null,
-): typeof PERMISSION_CODES.TRASH_VIEW | typeof PERMISSION_CODES.TASK_VIEW {
+  activeAction:
+    | typeof PERMISSION_CODES.TASK_VIEW
+    | typeof PERMISSION_CODES.TASK_HISTORY_VIEW = PERMISSION_CODES.TASK_VIEW,
+):
+  | typeof PERMISSION_CODES.TRASH_VIEW
+  | typeof PERMISSION_CODES.TASK_VIEW
+  | typeof PERMISSION_CODES.TASK_HISTORY_VIEW {
   return task !== null && isSoftDeleted(task) && project !== null && !isSoftDeleted(project)
     ? PERMISSION_CODES.TRASH_VIEW
-    : PERMISSION_CODES.TASK_VIEW;
+    : activeAction;
 }
 
 function buildTaskResource(input: {
@@ -841,7 +847,7 @@ export class TaskService {
 
     const canViewHistory = evaluateAuthorization({
       actor,
-      action: PERMISSION_CODES.TASK_HISTORY_VIEW,
+      action: resolveTaskReadAction(task, project, PERMISSION_CODES.TASK_HISTORY_VIEW),
       resource: taskResource,
       context: { now, policyConfig },
     }).allowed;
@@ -1032,7 +1038,7 @@ export class TaskService {
 
     assertAuthorized({
       actor,
-      action: resolveTaskReadAction(task, project),
+      action: resolveTaskReadAction(task, project, PERMISSION_CODES.TASK_HISTORY_VIEW),
       resource: buildTaskResource({
         organizationId: validatedOrgId,
         taskId: validatedTaskId,

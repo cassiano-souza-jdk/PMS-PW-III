@@ -1598,6 +1598,7 @@ describe('TaskService Integration (Lifecycle, Participants, Subtasks, Comments, 
           task.id,
         );
         expect(detail.task.deletedAt).toBeDefined();
+        expect(detail.deadlineHistory).toHaveLength(1);
 
         const comments = await container.services.tasks.listTaskComments(
           authorizedUserId,
@@ -1681,6 +1682,86 @@ describe('TaskService Integration (Lifecycle, Participants, Subtasks, Comments, 
         ).rejects.toThrowError(ConflictError);
       }
       expect(getBlobSpy).not.toHaveBeenCalled();
+    });
+
+    it('impõe TASK_HISTORY_VIEW em listTaskDeadlineHistory e getTaskDetail.deadlineHistory diante de ExplicitDenyRule e PermissionGrant parcial apenas de TASK_VIEW', async () => {
+      const { admin, manager, member, secondMember, organization, project } =
+        await setupProjectFixture();
+
+      const task = await container.services.tasks.createTask(
+        manager.user.id,
+        organization.id,
+        project.id,
+        {
+          title: 'Tarefa Histórico F07-T09',
+          assigneeId: member.user.id,
+          dueDate: asIsoDateTime('2026-07-24T18:00:00.000Z'),
+          deadlineJustification: 'Prazo inicial para validação de TASK_HISTORY_VIEW',
+        },
+      );
+
+      // Baseline: member responsável lê getTaskDetail com deadlineHistory populado e listTaskDeadlineHistory
+      const memberDetailBefore = await container.services.tasks.getTaskDetail(
+        member.user.id,
+        organization.id,
+        task.id,
+      );
+      expect(memberDetailBefore.deadlineHistory).toHaveLength(1);
+      expect(
+        await container.services.tasks.listTaskDeadlineHistory(
+          member.user.id,
+          organization.id,
+          task.id,
+        ),
+      ).toHaveLength(1);
+
+      // 1. ExplicitDenyRule apenas em TASK_HISTORY_VIEW mantém TASK_VIEW (getTaskDetail com deadlineHistory: []), mas bloqueia listTaskDeadlineHistory
+      await container.services.authorization.createExplicitDenyRule(
+        admin.user.id,
+        organization.id,
+        {
+          targetUserId: member.user.id,
+          permission: PERMISSION_CODES.TASK_HISTORY_VIEW,
+          scopeType: PERMISSION_SCOPE_TYPES.RESOURCE,
+          scopeId: asEntityId(task.id),
+          reason: 'Ocultar histórico de prazos mantendo leitura da tarefa',
+        },
+      );
+
+      const memberDetailAfterDeny = await container.services.tasks.getTaskDetail(
+        member.user.id,
+        organization.id,
+        task.id,
+      );
+      expect(memberDetailAfterDeny.task.id).toBe(task.id);
+      expect(memberDetailAfterDeny.deadlineHistory).toEqual([]);
+      await expect(
+        container.services.tasks.listTaskDeadlineHistory(member.user.id, organization.id, task.id),
+      ).rejects.toThrowError(AuthorizationError);
+
+      // 2. Ator fora do escopo (secondMember) com PermissionGrant apenas de TASK_VIEW acessa getTaskDetail (deadlineHistory: []), mas recebe AuthorizationError em listTaskDeadlineHistory
+      await container.services.authorization.grantPermission(admin.user.id, organization.id, {
+        granteeUserId: secondMember.user.id,
+        permission: PERMISSION_CODES.TASK_VIEW,
+        scopeType: PERMISSION_SCOPE_TYPES.RESOURCE,
+        scopeId: asEntityId(task.id),
+        reason: 'Concessão apenas de visualização da tarefa sem histórico de prazos',
+      });
+
+      const outsiderDetailWithTaskViewGrant = await container.services.tasks.getTaskDetail(
+        secondMember.user.id,
+        organization.id,
+        task.id,
+      );
+      expect(outsiderDetailWithTaskViewGrant.task.id).toBe(task.id);
+      expect(outsiderDetailWithTaskViewGrant.deadlineHistory).toEqual([]);
+      await expect(
+        container.services.tasks.listTaskDeadlineHistory(
+          secondMember.user.id,
+          organization.id,
+          task.id,
+        ),
+      ).rejects.toThrowError(AuthorizationError);
     });
   });
 });

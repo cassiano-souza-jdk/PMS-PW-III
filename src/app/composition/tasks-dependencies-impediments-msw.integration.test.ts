@@ -13,6 +13,7 @@ import {
   type Task,
   type TaskAttachment,
   type TaskComment,
+  type TaskDeadlineHistoryEntry,
   type TaskDetail,
 } from '@/modules/tasks';
 import { createDefaultOrganizationSettings } from '@/modules/settings';
@@ -793,5 +794,174 @@ describe('Phase 07 MSW Endpoints Integration (Tasks, Subtasks, Comments, Attachm
       { actorUserId: DEMO_MEMBER_USER_ID },
     );
     expect(safePdf.mimeType).toBe('application/pdf');
+  });
+
+  it('impõe TASK_HISTORY_VIEW em GET .../deadline-history e paridade TRASH_VIEW em tarefa soft-deleted via MSW', async () => {
+    // 1. ExplicitDenyRule apenas para TASK_HISTORY_VIEW mantém GET /tasks/:taskId (deadlineHistory: []) e bloqueia GET .../deadline-history com 403
+    const memberTask = await container.httpClient.post<Task>(
+      `/organizations/${DEMO_ORG_ID}/projects/${DEMO_PROJECT_ID}/tasks`,
+      {
+        title: 'Tarefa Deny TASK_HISTORY_VIEW MSW',
+        assigneeId: DEMO_MEMBER_USER_ID,
+        dueDate: asIsoDateTime('2026-08-20T18:00:00.000Z'),
+        deadlineJustification: 'Prazo inicial para validação MSW',
+      },
+      { actorUserId: DEMO_MANAGER_USER_ID },
+    );
+
+    await container.services.authorization.createExplicitDenyRule(DEMO_ADMIN_USER_ID, DEMO_ORG_ID, {
+      targetUserId: DEMO_MEMBER_USER_ID,
+      permission: PERMISSION_CODES.TASK_HISTORY_VIEW,
+      scopeType: PERMISSION_SCOPE_TYPES.RESOURCE,
+      scopeId: asEntityId(memberTask.id),
+      reason: 'Bloquear histórico de prazos via MSW mantendo TASK_VIEW',
+    });
+
+    const detailAfterDeny = await container.httpClient.get<TaskDetail>(
+      `/organizations/${DEMO_ORG_ID}/tasks/${memberTask.id}`,
+      { actorUserId: DEMO_MEMBER_USER_ID },
+    );
+    expect(detailAfterDeny.task.id).toBe(memberTask.id);
+    expect(detailAfterDeny.deadlineHistory).toEqual([]);
+
+    let denyHistoryError: unknown;
+    try {
+      await container.httpClient.get<readonly TaskDeadlineHistoryEntry[]>(
+        `/organizations/${DEMO_ORG_ID}/tasks/${memberTask.id}/deadline-history`,
+        { actorUserId: DEMO_MEMBER_USER_ID },
+      );
+    } catch (error) {
+      denyHistoryError = error;
+    }
+    expect(denyHistoryError).toBeInstanceOf(AuthorizationError);
+    expect((denyHistoryError as AuthorizationError).details?.httpStatus).toBe(403);
+
+    // 2. Ator fora do escopo com PermissionGrant apenas de TASK_VIEW lê GET /tasks/:taskId (deadlineHistory: []), mas recebe 403 em GET .../deadline-history
+    const outOfScopeTask = await container.httpClient.post<Task>(
+      `/organizations/${DEMO_ORG_ID}/projects/${DEMO_PROJECT_ID}/tasks`,
+      {
+        title: 'Tarefa Grant Parcial TASK_VIEW MSW',
+        assigneeId: DEMO_MANAGER_USER_ID,
+        dueDate: asIsoDateTime('2026-08-22T18:00:00.000Z'),
+        deadlineJustification: 'Prazo de tarefa fora do escopo do membro',
+      },
+      { actorUserId: DEMO_MANAGER_USER_ID },
+    );
+
+    await container.services.authorization.grantPermission(DEMO_ADMIN_USER_ID, DEMO_ORG_ID, {
+      granteeUserId: DEMO_MEMBER_USER_ID,
+      permission: PERMISSION_CODES.TASK_VIEW,
+      scopeType: PERMISSION_SCOPE_TYPES.RESOURCE,
+      scopeId: asEntityId(outOfScopeTask.id),
+      reason: 'Grant restrito apenas a TASK_VIEW sem TASK_HISTORY_VIEW',
+    });
+
+    const detailWithGrantOnly = await container.httpClient.get<TaskDetail>(
+      `/organizations/${DEMO_ORG_ID}/tasks/${outOfScopeTask.id}`,
+      { actorUserId: DEMO_MEMBER_USER_ID },
+    );
+    expect(detailWithGrantOnly.task.id).toBe(outOfScopeTask.id);
+    expect(detailWithGrantOnly.deadlineHistory).toEqual([]);
+
+    let grantHistoryError: unknown;
+    try {
+      await container.httpClient.get<readonly TaskDeadlineHistoryEntry[]>(
+        `/organizations/${DEMO_ORG_ID}/tasks/${outOfScopeTask.id}/deadline-history`,
+        { actorUserId: DEMO_MEMBER_USER_ID },
+      );
+    } catch (error) {
+      grantHistoryError = error;
+    }
+    expect(grantHistoryError).toBeInstanceOf(AuthorizationError);
+    expect((grantHistoryError as AuthorizationError).details?.httpStatus).toBe(403);
+
+    // 3. Paridade TRASH_VIEW: tarefa soft-deleted em projeto ativo retorna deadlineHistory populado para ADMIN/MANAGER e bloqueia MEMBER (403); projeto soft-deleted retorna 409
+    const deletedTask = await container.httpClient.post<Task>(
+      `/organizations/${DEMO_ORG_ID}/projects/${DEMO_PROJECT_ID}/tasks`,
+      {
+        title: 'Tarefa Soft-Deleted Paridade Histórico MSW',
+        assigneeId: DEMO_MEMBER_USER_ID,
+        dueDate: asIsoDateTime('2026-08-25T18:00:00.000Z'),
+        deadlineJustification: 'Prazo preservado na lixeira via MSW',
+      },
+      { actorUserId: DEMO_MANAGER_USER_ID },
+    );
+
+    await container.httpClient.delete<Task>(
+      `/organizations/${DEMO_ORG_ID}/tasks/${deletedTask.id}`,
+      { actorUserId: DEMO_MANAGER_USER_ID, query: { reason: 'Enviada para lixeira MSW' } },
+    );
+
+    for (const authorizedActorId of [DEMO_ADMIN_USER_ID, DEMO_MANAGER_USER_ID]) {
+      const trashDetail = await container.httpClient.get<TaskDetail>(
+        `/organizations/${DEMO_ORG_ID}/tasks/${deletedTask.id}`,
+        { actorUserId: authorizedActorId },
+      );
+      expect(trashDetail.task.deletedAt).toBeDefined();
+      expect(trashDetail.deadlineHistory).toHaveLength(1);
+
+      const trashHistory = await container.httpClient.get<readonly TaskDeadlineHistoryEntry[]>(
+        `/organizations/${DEMO_ORG_ID}/tasks/${deletedTask.id}/deadline-history`,
+        { actorUserId: authorizedActorId },
+      );
+      expect(trashHistory).toHaveLength(1);
+    }
+
+    let memberTrashDetailError: unknown;
+    try {
+      await container.httpClient.get<TaskDetail>(
+        `/organizations/${DEMO_ORG_ID}/tasks/${deletedTask.id}`,
+        { actorUserId: DEMO_MEMBER_USER_ID },
+      );
+    } catch (error) {
+      memberTrashDetailError = error;
+    }
+    expect(memberTrashDetailError).toBeInstanceOf(AuthorizationError);
+    expect((memberTrashDetailError as AuthorizationError).details?.httpStatus).toBe(403);
+
+    let memberTrashHistoryError: unknown;
+    try {
+      await container.httpClient.get<readonly TaskDeadlineHistoryEntry[]>(
+        `/organizations/${DEMO_ORG_ID}/tasks/${deletedTask.id}/deadline-history`,
+        { actorUserId: DEMO_MEMBER_USER_ID },
+      );
+    } catch (error) {
+      memberTrashHistoryError = error;
+    }
+    expect(memberTrashHistoryError).toBeInstanceOf(AuthorizationError);
+    expect((memberTrashHistoryError as AuthorizationError).details?.httpStatus).toBe(403);
+
+    await container.services.projects.deleteProject(
+      DEMO_ADMIN_USER_ID,
+      DEMO_ORG_ID,
+      DEMO_PROJECT_ID,
+      { reason: 'Projeto também excluído logicamente' },
+    );
+
+    for (const actorId of [DEMO_ADMIN_USER_ID, DEMO_MANAGER_USER_ID]) {
+      let deletedProjectDetailError: unknown;
+      try {
+        await container.httpClient.get<TaskDetail>(
+          `/organizations/${DEMO_ORG_ID}/tasks/${deletedTask.id}`,
+          { actorUserId: actorId },
+        );
+      } catch (error) {
+        deletedProjectDetailError = error;
+      }
+      expect(deletedProjectDetailError).toBeInstanceOf(ConflictError);
+      expect((deletedProjectDetailError as ConflictError).details?.httpStatus).toBe(409);
+
+      let deletedProjectHistoryError: unknown;
+      try {
+        await container.httpClient.get<readonly TaskDeadlineHistoryEntry[]>(
+          `/organizations/${DEMO_ORG_ID}/tasks/${deletedTask.id}/deadline-history`,
+          { actorUserId: actorId },
+        );
+      } catch (error) {
+        deletedProjectHistoryError = error;
+      }
+      expect(deletedProjectHistoryError).toBeInstanceOf(ConflictError);
+      expect((deletedProjectHistoryError as ConflictError).details?.httpStatus).toBe(409);
+    }
   });
 });
