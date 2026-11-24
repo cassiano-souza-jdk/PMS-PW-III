@@ -140,7 +140,7 @@ export function FocusActionableSection({
                       {candidate.dueDate !== undefined ? (
                         <p className="text-xs text-muted-foreground">
                           {intl.formatMessage(
-                            { id: 'tasks.dueDateLabel' },
+                            { id: 'tasks.fields.dueDateDisplay' },
                             { date: formatDatePtBr(intl, candidate.dueDate) },
                           )}
                         </p>
