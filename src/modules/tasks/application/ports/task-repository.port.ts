@@ -48,6 +48,7 @@ export interface TaskParticipantRepositoryPort {
     taskId: TaskId,
     userId: UserId,
   ): Promise<TaskParticipant | null>;
+  listByOrganization(organizationId: OrganizationId): Promise<readonly TaskParticipant[]>;
   listByTask(organizationId: OrganizationId, taskId: TaskId): Promise<readonly TaskParticipant[]>;
   listByUser(organizationId: OrganizationId, userId: UserId): Promise<readonly TaskParticipant[]>;
   save(participant: TaskParticipant): Promise<void>;
@@ -55,6 +56,7 @@ export interface TaskParticipantRepositoryPort {
 
 export interface SubtaskRepositoryPort {
   findById(organizationId: OrganizationId, subtaskId: SubtaskId): Promise<Subtask | null>;
+  listByOrganization(organizationId: OrganizationId): Promise<readonly Subtask[]>;
   listByTask(organizationId: OrganizationId, taskId: TaskId): Promise<readonly Subtask[]>;
   save(subtask: Subtask): Promise<void>;
   saveMany(organizationId: OrganizationId, subtasks: readonly Subtask[]): Promise<void>;

@@ -16,12 +16,21 @@ import {
   type CreateExplicitDenyRuleInput,
   type GrantPermissionInput,
 } from '@/modules/authorization';
+import {
+  BottleneckService,
+  asBottleneckAlertId,
+  type BottleneckAlertStatus,
+  type BottleneckIndicator,
+  type UpdateIndividualProductivityVisibilityInput,
+  type UpdateProjectBottleneckRulesInput,
+} from '@/modules/bottlenecks';
 import { DEMO_SEED_VERSION } from '@/modules/demo';
 import {
   DependencyService,
   asTaskDependencyId,
   type AddTaskDependencyInput,
 } from '@/modules/dependencies';
+import { FocusService, type UpdateFocusPreferencesInput } from '@/modules/focus';
 import {
   ImpedimentService,
   type CreateImpedimentInput,
@@ -137,6 +146,10 @@ import {
   createImpedimentWorkContextAdapter,
   createTaskProjectContextAdapter,
 } from './task-ports-adapter';
+import {
+  createBottleneckWorkContextAdapter,
+  createFocusWorkContextAdapter,
+} from './work-intelligence-ports-adapter';
 
 export interface MswCompositionDependencies {
   readonly repositories: AppRepositoriesRegistry;
@@ -561,6 +574,33 @@ function resolveMswServices(deps: MswCompositionDependencies): AppServicesRegist
     impediments: new ImpedimentService({
       impediments: deps.repositories.impediments.impediments,
       workContext: createImpedimentWorkContextAdapter(deps.repositories),
+      organizationMembers: deps.repositories.organizations.organizationMembers,
+      organizationSettings: deps.repositories.settings.organizationSettings,
+      permissionGrants: deps.repositories.authorization.permissionGrants,
+      explicitDenyRules: deps.repositories.authorization.explicitDenyRules,
+      auditEvents: deps.repositories.audit.auditEvents,
+      transactionPort: deps.transactionPort,
+      eventBus: deps.eventBus,
+      ...(deps.now !== undefined ? { now: deps.now } : {}),
+      ...(deps.generateUuid !== undefined ? { generateUuid: deps.generateUuid } : {}),
+    }),
+    focus: new FocusService({
+      focusPreferences: deps.repositories.focus.focusPreferences,
+      workContext: createFocusWorkContextAdapter(deps.repositories),
+      organizations: deps.repositories.organizations.organizations,
+      organizationMembers: deps.repositories.organizations.organizationMembers,
+      organizationSettings: deps.repositories.settings.organizationSettings,
+      permissionGrants: deps.repositories.authorization.permissionGrants,
+      explicitDenyRules: deps.repositories.authorization.explicitDenyRules,
+      transactionPort: deps.transactionPort,
+      eventBus: deps.eventBus,
+      ...(deps.now !== undefined ? { now: deps.now } : {}),
+      ...(deps.generateUuid !== undefined ? { generateUuid: deps.generateUuid } : {}),
+    }),
+    bottlenecks: new BottleneckService({
+      bottleneckAlerts: deps.repositories.bottlenecks.bottleneckAlerts,
+      workContext: createBottleneckWorkContextAdapter(deps.repositories),
+      organizations: deps.repositories.organizations.organizations,
       organizationMembers: deps.repositories.organizations.organizationMembers,
       organizationSettings: deps.repositories.settings.organizationSettings,
       permissionGrants: deps.repositories.authorization.permissionGrants,
@@ -3026,6 +3066,271 @@ export function createMswHandlers(deps: MswCompositionDependencies): readonly Ht
         );
 
         return buildSuccessResponse(transitioned, correlationId, now, 200);
+      }),
+    ),
+
+    // -------------------------------------------------------------------------
+    // Phase 08 — Focus Mode, Workload 0–100 & Bottlenecks (FocusService & BottleneckService)
+    // -------------------------------------------------------------------------
+    http.get(
+      '*/api/v1/organizations/:organizationId/focus',
+      withSimulatedEndpoint(deps, async ({ request, params, correlationId, now }) => {
+        const actorUserId = requireActorUserId(request);
+        const organizationId = asOrganizationId(
+          String(params.organizationId ?? ''),
+          'organizationId',
+        );
+        const url = new URL(request.url);
+        const rawProjectId = url.searchParams.get('projectId')?.trim();
+        const rawOnlyMyTasks = url.searchParams.get('onlyMyTasks')?.trim();
+
+        const view = await services.focus.getMyFocusView(actorUserId, organizationId, {
+          ...(rawProjectId ? { projectId: asProjectId(rawProjectId, 'projectId') } : {}),
+          ...(rawOnlyMyTasks === 'true' ? { onlyMyTasks: true } : {}),
+        });
+        return buildSuccessResponse(view, correlationId, now, 200);
+      }),
+    ),
+
+    http.put(
+      '*/api/v1/organizations/:organizationId/focus/preferences',
+      withSimulatedEndpoint(deps, async ({ request, params, correlationId, now, nextUuid }) => {
+        const actorUserId = requireActorUserId(request);
+        const organizationId = asOrganizationId(
+          String(params.organizationId ?? ''),
+          'organizationId',
+        );
+        const rawBody = (await request
+          .json()
+          .catch(() => null)) as UpdateFocusPreferencesInput | null;
+        if (!rawBody || typeof rawBody !== 'object') {
+          throw new ValidationError('Invalid JSON body for focus preferences update.');
+        }
+
+        const updated = await services.focus.updateFocusPreferences(actorUserId, organizationId, {
+          ...rawBody,
+          correlationId: asCorrelationId(isUuid(correlationId) ? correlationId : nextUuid()),
+        });
+        return buildSuccessResponse(updated, correlationId, now, 200);
+      }),
+    ),
+
+    http.post(
+      '*/api/v1/organizations/:organizationId/focus/preferences/reset',
+      withSimulatedEndpoint(deps, async ({ request, params, correlationId, now, nextUuid }) => {
+        const actorUserId = requireActorUserId(request);
+        const organizationId = asOrganizationId(
+          String(params.organizationId ?? ''),
+          'organizationId',
+        );
+
+        const reset = await services.focus.resetFocusPreferences(actorUserId, organizationId, {
+          correlationId: asCorrelationId(isUuid(correlationId) ? correlationId : nextUuid()),
+        });
+        return buildSuccessResponse(reset, correlationId, now, 200);
+      }),
+    ),
+
+    http.get(
+      '*/api/v1/organizations/:organizationId/workload/me',
+      withSimulatedEndpoint(deps, async ({ request, params, correlationId, now }) => {
+        const actorUserId = requireActorUserId(request);
+        const organizationId = asOrganizationId(
+          String(params.organizationId ?? ''),
+          'organizationId',
+        );
+
+        const summary = await services.bottlenecks.getMyWorkloadSummary(
+          actorUserId,
+          organizationId,
+        );
+        return buildSuccessResponse(summary, correlationId, now, 200);
+      }),
+    ),
+
+    http.get(
+      '*/api/v1/organizations/:organizationId/bottlenecks',
+      withSimulatedEndpoint(deps, async ({ request, params, correlationId, now }) => {
+        const actorUserId = requireActorUserId(request);
+        const organizationId = asOrganizationId(
+          String(params.organizationId ?? ''),
+          'organizationId',
+        );
+        const url = new URL(request.url);
+        const rawProjectId = url.searchParams.get('projectId')?.trim();
+        const rawIndicator = url.searchParams.get('indicator')?.trim();
+        const rawStatus = url.searchParams.get('status')?.trim();
+        const rawIncludeResolved = url.searchParams.get('includeResolved')?.trim();
+
+        const alerts = await services.bottlenecks.listOrganizationAlerts(
+          actorUserId,
+          organizationId,
+          {
+            ...(rawProjectId ? { projectId: asProjectId(rawProjectId, 'projectId') } : {}),
+            ...(rawIndicator ? { indicator: rawIndicator as BottleneckIndicator } : {}),
+            ...(rawStatus ? { status: rawStatus as BottleneckAlertStatus } : {}),
+            ...(rawIncludeResolved === 'true' ? { includeResolved: true } : {}),
+          },
+        );
+        return buildSuccessResponse(alerts, correlationId, now, 200);
+      }),
+    ),
+
+    http.get(
+      '*/api/v1/organizations/:organizationId/projects/:projectId/bottlenecks',
+      withSimulatedEndpoint(deps, async ({ request, params, correlationId, now }) => {
+        const actorUserId = requireActorUserId(request);
+        const organizationId = asOrganizationId(
+          String(params.organizationId ?? ''),
+          'organizationId',
+        );
+        const projectId = asProjectId(String(params.projectId ?? ''), 'projectId');
+
+        const overview = await services.bottlenecks.getProjectBottlenecksOverview(
+          actorUserId,
+          organizationId,
+          projectId,
+        );
+        return buildSuccessResponse(overview, correlationId, now, 200);
+      }),
+    ),
+
+    http.post(
+      '*/api/v1/organizations/:organizationId/projects/:projectId/bottlenecks/evaluate',
+      withSimulatedEndpoint(deps, async ({ request, params, correlationId, now, nextUuid }) => {
+        const actorUserId = requireActorUserId(request);
+        const organizationId = asOrganizationId(
+          String(params.organizationId ?? ''),
+          'organizationId',
+        );
+        const projectId = asProjectId(String(params.projectId ?? ''), 'projectId');
+
+        const result = await services.bottlenecks.evaluateProjectBottlenecks(
+          actorUserId,
+          organizationId,
+          projectId,
+          {
+            correlationId: asCorrelationId(isUuid(correlationId) ? correlationId : nextUuid()),
+          },
+        );
+        return buildSuccessResponse(result, correlationId, now, 200);
+      }),
+    ),
+
+    http.patch(
+      '*/api/v1/organizations/:organizationId/projects/:projectId/bottlenecks/thresholds',
+      withSimulatedEndpoint(deps, async ({ request, params, correlationId, now, nextUuid }) => {
+        const actorUserId = requireActorUserId(request);
+        const organizationId = asOrganizationId(
+          String(params.organizationId ?? ''),
+          'organizationId',
+        );
+        const projectId = asProjectId(String(params.projectId ?? ''), 'projectId');
+        const rawBody = (await request
+          .json()
+          .catch(() => null)) as UpdateProjectBottleneckRulesInput | null;
+        if (!rawBody || typeof rawBody !== 'object') {
+          throw new ValidationError('Invalid JSON body for bottleneck thresholds update.');
+        }
+
+        const updated = await services.bottlenecks.updateProjectBottleneckRules(
+          actorUserId,
+          organizationId,
+          projectId,
+          {
+            ...rawBody,
+            correlationId: asCorrelationId(isUuid(correlationId) ? correlationId : nextUuid()),
+          },
+        );
+        return buildSuccessResponse(updated, correlationId, now, 200);
+      }),
+    ),
+
+    http.post(
+      '*/api/v1/organizations/:organizationId/bottlenecks/:alertId/acknowledge',
+      withSimulatedEndpoint(deps, async ({ request, params, correlationId, now, nextUuid }) => {
+        const actorUserId = requireActorUserId(request);
+        const organizationId = asOrganizationId(
+          String(params.organizationId ?? ''),
+          'organizationId',
+        );
+        const alertId = asBottleneckAlertId(String(params.alertId ?? ''), 'alertId');
+
+        const acknowledged = await services.bottlenecks.acknowledgeAlert(
+          actorUserId,
+          organizationId,
+          alertId,
+          {
+            correlationId: asCorrelationId(isUuid(correlationId) ? correlationId : nextUuid()),
+          },
+        );
+        return buildSuccessResponse(acknowledged, correlationId, now, 200);
+      }),
+    ),
+
+    http.post(
+      '*/api/v1/organizations/:organizationId/bottlenecks/:alertId/resolve',
+      withSimulatedEndpoint(deps, async ({ request, params, correlationId, now, nextUuid }) => {
+        const actorUserId = requireActorUserId(request);
+        const organizationId = asOrganizationId(
+          String(params.organizationId ?? ''),
+          'organizationId',
+        );
+        const alertId = asBottleneckAlertId(String(params.alertId ?? ''), 'alertId');
+
+        const resolved = await services.bottlenecks.resolveAlert(
+          actorUserId,
+          organizationId,
+          alertId,
+          {
+            correlationId: asCorrelationId(isUuid(correlationId) ? correlationId : nextUuid()),
+          },
+        );
+        return buildSuccessResponse(resolved, correlationId, now, 200);
+      }),
+    ),
+
+    http.get(
+      '*/api/v1/organizations/:organizationId/settings/productivity-visibility',
+      withSimulatedEndpoint(deps, async ({ request, params, correlationId, now }) => {
+        const actorUserId = requireActorUserId(request);
+        const organizationId = asOrganizationId(
+          String(params.organizationId ?? ''),
+          'organizationId',
+        );
+
+        const visibility = await services.bottlenecks.getIndividualProductivityVisibility(
+          actorUserId,
+          organizationId,
+        );
+        return buildSuccessResponse(visibility, correlationId, now, 200);
+      }),
+    ),
+
+    http.patch(
+      '*/api/v1/organizations/:organizationId/settings/productivity-visibility',
+      withSimulatedEndpoint(deps, async ({ request, params, correlationId, now, nextUuid }) => {
+        const actorUserId = requireActorUserId(request);
+        const organizationId = asOrganizationId(
+          String(params.organizationId ?? ''),
+          'organizationId',
+        );
+        const rawBody = (await request
+          .json()
+          .catch(() => null)) as UpdateIndividualProductivityVisibilityInput | null;
+        if (!rawBody || typeof rawBody !== 'object') {
+          throw new ValidationError('Invalid JSON body for productivity visibility update.');
+        }
+
+        const updated = await services.bottlenecks.updateIndividualProductivityVisibility(
+          actorUserId,
+          organizationId,
+          {
+            ...rawBody,
+            correlationId: asCorrelationId(isUuid(correlationId) ? correlationId : nextUuid()),
+          },
+        );
+        return buildSuccessResponse(updated, correlationId, now, 200);
       }),
     ),
 

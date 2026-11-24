@@ -21,5 +21,12 @@ export interface BottleneckAlertRepositoryPort {
       readonly status?: BottleneckAlertStatus;
     },
   ): Promise<readonly BottleneckAlert[]>;
+  listActiveByOrganization(
+    organizationId: OrganizationId,
+    options?: {
+      readonly projectId?: ProjectId;
+    },
+  ): Promise<readonly BottleneckAlert[]>;
   save(alert: BottleneckAlert): Promise<void>;
+  saveMany(organizationId: OrganizationId, alerts: readonly BottleneckAlert[]): Promise<void>;
 }

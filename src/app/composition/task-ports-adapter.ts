@@ -32,7 +32,7 @@ import {
 } from '@/shared/kernel';
 import type { AppRepositoriesRegistry } from './repositories-registry';
 
-async function resolveActorProjectScopes(
+export async function resolveActorProjectScopes(
   repositories: AppRepositoriesRegistry,
   organizationId: OrganizationId,
   userId: UserId,

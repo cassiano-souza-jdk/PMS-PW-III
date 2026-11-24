@@ -1,3 +1,4 @@
+import { Dexie } from 'dexie';
 import { ConflictError } from '@/shared/errors';
 import {
   TRANSACTION_RESOURCES,
@@ -159,6 +160,21 @@ export class DexieTaskParticipantRepository implements TaskParticipantRepository
     });
   }
 
+  async listByOrganization(organizationId: OrganizationId): Promise<readonly TaskParticipant[]> {
+    return withPersistenceErrorHandling('TaskParticipant.listByOrganization', async () => {
+      const records = await this.table
+        .where('[organizationId+taskId]')
+        .between([organizationId, Dexie.minKey], [organizationId, Dexie.maxKey])
+        .toArray();
+      return records.sort(
+        (a, b) =>
+          a.taskId.localeCompare(b.taskId) ||
+          a.userId.localeCompare(b.userId) ||
+          a.id.localeCompare(b.id),
+      );
+    });
+  }
+
   async listByTask(
     organizationId: OrganizationId,
     taskId: TaskId,
@@ -195,6 +211,15 @@ export class DexieSubtaskRepository implements SubtaskRepositoryPort {
 
   async findById(organizationId: OrganizationId, subtaskId: SubtaskId): Promise<Subtask | null> {
     return findOrganizationScopedById(this.table, organizationId, subtaskId, 'Subtask');
+  }
+
+  async listByOrganization(organizationId: OrganizationId): Promise<readonly Subtask[]> {
+    return withPersistenceErrorHandling('Subtask.listByOrganization', async () => {
+      const records = await this.table.where('organizationId').equals(organizationId).toArray();
+      return records.sort(
+        (a, b) => a.taskId.localeCompare(b.taskId) || a.order - b.order || a.id.localeCompare(b.id),
+      );
+    });
   }
 
   async listByTask(organizationId: OrganizationId, taskId: TaskId): Promise<readonly Subtask[]> {

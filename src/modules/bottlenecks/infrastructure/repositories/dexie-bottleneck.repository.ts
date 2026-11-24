@@ -6,6 +6,7 @@ import {
 } from '@/shared/kernel';
 import {
   findOrganizationScopedById,
+  saveManyOrganizationScopedEntities,
   saveOrganizationScopedEntity,
   withPersistenceErrorHandling,
   type PmsDatabase,
@@ -93,7 +94,39 @@ export class DexieBottleneckAlertRepository implements BottleneckAlertRepository
     });
   }
 
+  async listActiveByOrganization(
+    organizationId: OrganizationId,
+    options?: {
+      readonly projectId?: ProjectId;
+    },
+  ): Promise<readonly BottleneckAlert[]> {
+    return withPersistenceErrorHandling('BottleneckAlert.listActiveByOrganization', async () => {
+      const records =
+        options?.projectId !== undefined
+          ? await this.table
+              .where('[organizationId+projectId]')
+              .equals([organizationId, options.projectId])
+              .toArray()
+          : await this.table.where('organizationId').equals(organizationId).toArray();
+
+      return records
+        .filter((alert) => !isBottleneckAlertResolved(alert))
+        .sort(
+          (a, b) =>
+            parseIsoDateTimeMs(b.lastSeenAt) - parseIsoDateTimeMs(a.lastSeenAt) ||
+            a.id.localeCompare(b.id),
+        );
+    });
+  }
+
   async save(alert: BottleneckAlert): Promise<void> {
     await saveOrganizationScopedEntity(this.table, alert, 'BottleneckAlert');
+  }
+
+  async saveMany(
+    organizationId: OrganizationId,
+    alerts: readonly BottleneckAlert[],
+  ): Promise<void> {
+    await saveManyOrganizationScopedEntities(this.table, organizationId, alerts, 'BottleneckAlert');
   }
 }
