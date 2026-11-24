@@ -137,3 +137,5 @@ export {
   type AttachmentDescriptor,
   type ValidateAttachmentQuotaInput,
 } from './attachments';
+
+export type { ProjectBottleneckThresholds } from './bottlenecks';

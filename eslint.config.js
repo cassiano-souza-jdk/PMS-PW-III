@@ -223,7 +223,7 @@ const BOUNDARIES_POLICIES = [
       },
     ],
   },
-  // Blindagem mecânica do DAG acíclico entre módulos (ADR-0010 §3.4 & ADR-0011 §3).
+  // Blindagem mecânica do DAG acíclico entre módulos (ADR-0010 §3.4, ADR-0011 §3 & ADR-0012 §3).
   // Mantido antes da política de testes (`file: { categories: 'test' }`) para não bloquear `*.test.ts(x)`.
   createModuleDagDisallowPolicy(
     'tasks',
@@ -244,6 +244,16 @@ const BOUNDARIES_POLICIES = [
     'impediments',
     ['tasks', 'projects', 'kanban'],
     'O módulo impediments não pode importar diretamente tasks, projects ou kanban (use portas locais em application/ports — ADR-0011).',
+  ),
+  createModuleDagDisallowPolicy(
+    'bottlenecks',
+    ['focus', 'tasks', 'projects', 'kanban', 'dependencies', 'impediments', 'analytics'],
+    'O módulo bottlenecks não pode importar diretamente focus, tasks, projects, kanban, dependencies, impediments ou analytics (use portas locais em application/ports — ADR-0012).',
+  ),
+  createModuleDagDisallowPolicy(
+    'focus',
+    ['tasks', 'projects', 'kanban', 'dependencies', 'impediments', 'analytics'],
+    'O módulo focus não pode importar diretamente tasks, projects, kanban, dependencies, impediments ou analytics (use portas locais em application/ports — ADR-0012).',
   ),
   // app-shell: app-shell, app-composition, module-presentation, module-public-api e shared-* (proibido module-infrastructure)
   {

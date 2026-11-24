@@ -301,6 +301,85 @@ describe(
       expect(coreInvariantsResult?.messages.filter((msg) => msg.severity === 2)).toEqual([]);
     });
 
+    it('blocks acyclic DAG violations in bottlenecks and focus (ADR-0012 §3)', async () => {
+      const bottlenecksViolations = await lintSnippet(
+        [
+          "import { FOCUS_MODES } from '@/modules/focus';",
+          "import { SUBTASK_STATUSES } from '@/modules/tasks';",
+          "import { PROJECT_STATUSES } from '@/modules/projects';",
+          "import { BOARD_COLUMN_ROLES } from '@/modules/kanban';",
+          "import { assertNoDependencyCycle } from '@/modules/dependencies';",
+          "import { IMPEDIMENT_CATEGORIES } from '@/modules/impediments';",
+          "import { ANALYTICS_PERIOD_PRESETS } from '@/modules/analytics';",
+          'export const forbiddenBottleneckImports = [',
+          '  FOCUS_MODES,',
+          '  SUBTASK_STATUSES,',
+          '  PROJECT_STATUSES,',
+          '  BOARD_COLUMN_ROLES,',
+          '  assertNoDependencyCycle,',
+          '  IMPEDIMENT_CATEGORIES,',
+          '  ANALYTICS_PERIOD_PRESETS,',
+          '];',
+        ].join('\n'),
+        'src/modules/bottlenecks/application/violation-dag.ts',
+      );
+      const focusViolations = await lintSnippet(
+        [
+          "import { SUBTASK_STATUSES } from '@/modules/tasks';",
+          "import { PROJECT_STATUSES } from '@/modules/projects';",
+          "import { BOARD_COLUMN_ROLES } from '@/modules/kanban';",
+          "import { assertNoDependencyCycle } from '@/modules/dependencies';",
+          "import { IMPEDIMENT_CATEGORIES } from '@/modules/impediments';",
+          "import { ANALYTICS_PERIOD_PRESETS } from '@/modules/analytics';",
+          'export const forbiddenFocusImports = [',
+          '  SUBTASK_STATUSES,',
+          '  PROJECT_STATUSES,',
+          '  BOARD_COLUMN_ROLES,',
+          '  assertNoDependencyCycle,',
+          '  IMPEDIMENT_CATEGORIES,',
+          '  ANALYTICS_PERIOD_PRESETS,',
+          '];',
+        ].join('\n'),
+        'src/modules/focus/application/violation-dag.ts',
+      );
+
+      expect(
+        bottlenecksViolations.filter(
+          (msg) => msg.ruleId === 'boundaries/dependencies' && msg.severity === 2,
+        ),
+      ).toHaveLength(7);
+      expect(
+        focusViolations.filter(
+          (msg) => msg.ruleId === 'boundaries/dependencies' && msg.severity === 2,
+        ),
+      ).toHaveLength(6);
+    });
+
+    it('allows legitimate focus -> bottlenecks DAG dependency and preserves test files (ADR-0012 §3)', async () => {
+      const validFocusAppMessages = await lintSnippet(
+        [
+          "import { BOTTLENECK_INDICATORS, calculateWorkloadScore } from '@/modules/bottlenecks';",
+          'export const validFocusImports = [BOTTLENECK_INDICATORS, calculateWorkloadScore];',
+        ].join('\n'),
+        'src/modules/focus/application/valid-dag.ts',
+      );
+      const [analyticsFocusBottlenecksResult] = await eslint.lintFiles([
+        path.resolve(
+          WORKSPACE_ROOT,
+          'src/modules/analytics/domain/analytics-focus-bottlenecks.test.ts',
+        ),
+      ]);
+      const [bottleneckDomainTestResult] = await eslint.lintFiles([
+        path.resolve(WORKSPACE_ROOT, 'src/modules/bottlenecks/domain/bottleneck.test.ts'),
+      ]);
+
+      expect(validFocusAppMessages.filter((msg) => msg.severity === 2)).toEqual([]);
+      expect(analyticsFocusBottlenecksResult?.messages.filter((msg) => msg.severity === 2)).toEqual(
+        [],
+      );
+      expect(bottleneckDomainTestResult?.messages.filter((msg) => msg.severity === 2)).toEqual([]);
+    });
+
     it('blocks circular dependencies between real files (import-x/no-cycle)', async () => {
       const [result] = await eslint.lintFiles([path.join(TMP_ALPHA_DIR, 'domain', 'cycle-a.ts')]);
       if (!result) {
