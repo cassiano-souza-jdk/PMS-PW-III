@@ -15,6 +15,7 @@ import { getErrorMessageId, type MessageId } from '@/shared/i18n';
 import {
   ORGANIZATION_ROLES,
   asEntityId,
+  isSoftDeleted,
   type OrganizationRole,
   type ProjectId,
   type UserId,
@@ -267,7 +268,13 @@ export function buildTaskDetailCapabilities(input: {
     canComment,
     canModerateComments,
     canManageAttachments: can(PERMISSION_CODES.TASK_ATTACHMENT_MANAGE, baseResource, policyConfig),
-    canViewHistory: can(PERMISSION_CODES.TASK_HISTORY_VIEW, baseResource, policyConfig),
+    canViewHistory: can(
+      isSoftDeleted(detail.task) && !isSoftDeleted(detail.project)
+        ? PERMISSION_CODES.TRASH_VIEW
+        : PERMISSION_CODES.TASK_HISTORY_VIEW,
+      baseResource,
+      policyConfig,
+    ),
     canManageDependencies: can(
       PERMISSION_CODES.DEPENDENCY_MANAGE,
       {

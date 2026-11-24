@@ -20,13 +20,16 @@ import { PERMISSION_CODES, PERMISSION_SCOPE_TYPES } from '@/modules/authorizatio
 import { asTaskDependencyId } from '@/modules/dependencies';
 import { TaskDependenciesPanel } from '@/modules/dependencies/presentation';
 import { IMPEDIMENT_CATEGORIES } from '@/modules/impediments';
-import { createDefaultOrganizationSettings } from '@/modules/settings';
-import { asTaskCommentId, type TaskComment } from '@/modules/tasks';
-import { TaskCommentsPanel } from '@/modules/tasks/presentation';
+import { createDefaultOrganizationSettings, toAuthorizationPolicyConfig } from '@/modules/settings';
+import { asTaskCommentId, type TaskComment, type TaskDetail } from '@/modules/tasks';
+import { TaskAttachmentsPanel, TaskCommentsPanel } from '@/modules/tasks/presentation';
 import { AuthorizationError } from '@/shared/errors';
 import { ptBRMessages } from '@/shared/i18n';
 import {
   IMPEDIMENT_SEVERITIES,
+  MAX_ATTACHMENT_SIZE_BYTES,
+  MAX_CONTEXT_ATTACHMENTS_SIZE_BYTES,
+  ORGANIZATION_ROLES,
   PRIORITIES,
   TASK_STATUSES,
   asEntityId,
@@ -37,6 +40,7 @@ import {
 } from '@/shared/kernel';
 import { createLogger, createMemoryLogSink } from '@/shared/logging';
 import { PMS_DATABASE_NAME, ensureDatabaseOpen } from '@/shared/persistence';
+import { buildTaskDetailCapabilities, type PermissionChecker } from './pages/task-page-helpers';
 import { appRoutes } from './routes';
 
 describe('Tasks, Subtasks, Dependencies & Impediments Presentation + Routing + ABAC + Accessibility (vitest-axe)', () => {
@@ -1535,4 +1539,170 @@ describe('Tasks, Subtasks, Dependencies & Impediments Presentation + Routing + A
       expect(await axe(container)).toHaveNoViolations();
     },
   );
+
+  it(
+    'bloqueia seleção e upload de arquivos com MIME proibido (image/svg+xml, text/html; charset=utf-8, application/x-msdownload) no TaskAttachmentsPanel com role="alert" e 0 violações vitest-axe',
+    { timeout: 20_000 },
+    async () => {
+      const user = userEvent.setup();
+      const actorId = asUserId(DEMO_MEMBER_USER_ID);
+      const usersById = new Map([
+        [
+          actorId,
+          {
+            userId: actorId,
+            displayName: 'Membro Teste',
+          },
+        ],
+      ]);
+      const onUploadAttachment = vi.fn(async () => undefined);
+      const onDownloadAttachment = vi.fn(async () => undefined);
+      const onDeleteAttachment = vi.fn(async () => undefined);
+
+      const { container } = render(
+        <IntlProvider locale="pt-BR" messages={ptBRMessages}>
+          <TaskAttachmentsPanel
+            attachments={[]}
+            taskStatus={TASK_STATUSES.IN_PROGRESS}
+            maxAttachmentSizeBytes={MAX_ATTACHMENT_SIZE_BYTES}
+            maxContextAttachmentsSizeBytes={MAX_CONTEXT_ATTACHMENTS_SIZE_BYTES}
+            maxAttachmentsPerContext={10}
+            isReadOnly={false}
+            canManageAttachments={true}
+            usersById={usersById}
+            isMutating={false}
+            onUploadAttachment={onUploadAttachment}
+            onDownloadAttachment={onDownloadAttachment}
+            onDeleteAttachment={onDeleteAttachment}
+          />
+        </IntlProvider>,
+      );
+
+      const fileInput = screen.getByLabelText(ptBRMessages['attachments.upload.label'], {
+        exact: false,
+      });
+      const uploadButton = screen.getByRole('button', {
+        name: ptBRMessages['attachments.upload.action'],
+      });
+
+      const disallowedFiles = [
+        { fileName: 'vector.svg', mimeType: 'image/svg+xml' },
+        { fileName: 'page.html', mimeType: 'text/html; charset=utf-8' },
+        { fileName: 'payload.exe', mimeType: 'application/x-msdownload' },
+      ] as const;
+
+      for (const item of disallowedFiles) {
+        const forbiddenFile = new File(['conteudo malicioso'], item.fileName, {
+          type: item.mimeType,
+        });
+        expect(forbiddenFile.type).toContain(item.mimeType.split(';', 1)[0]!);
+
+        await user.upload(fileInput, forbiddenFile);
+
+        const alert = await screen.findByRole('alert');
+        expect(
+          within(alert).getByText(ptBRMessages['attachments.upload.invalidTypeError']),
+        ).toBeInTheDocument();
+        expect(fileInput).toHaveAttribute('aria-invalid', 'true');
+
+        await user.click(uploadButton);
+        expect(onUploadAttachment).not.toHaveBeenCalled();
+        expect(
+          within(screen.getByRole('alert')).getByText(
+            ptBRMessages['attachments.upload.invalidTypeError'],
+          ),
+        ).toBeInTheDocument();
+        expect(await axe(container)).toHaveNoViolations();
+      }
+    },
+  );
+
+  it('alinha canViewHistory em buildTaskDetailCapabilities entre TASK_HISTORY_VIEW e TRASH_VIEW conforme soft-delete da tarefa e do projeto', async () => {
+    const appContainer = await createIsolatedContainer();
+    await appContainer.seedDemoOrganization();
+
+    const activeDetail = await appContainer.services.tasks.getTaskDetail(
+      DEMO_ADMIN_USER_ID,
+      DEMO_ORG_ID,
+      DEMO_TASK_IDS.FOUNDATION_TASK,
+    );
+    const policyConfig = toAuthorizationPolicyConfig(
+      createDefaultOrganizationSettings(DEMO_ORG_ID, asIsoDateTime('2026-08-01T10:00:00.000Z')),
+    );
+
+    const checkedOnActive: string[] = [];
+    const activeCanDenyHistory: PermissionChecker = (permission) => {
+      checkedOnActive.push(permission);
+      return permission !== PERMISSION_CODES.TASK_HISTORY_VIEW;
+    };
+
+    const activeCaps = buildTaskDetailCapabilities({
+      detail: activeDetail,
+      actorRole: ORGANIZATION_ROLES.MEMBER,
+      managedProjectIds: [],
+      impediments: [],
+      can: activeCanDenyHistory,
+      policyConfig,
+    });
+    expect(checkedOnActive).toContain(PERMISSION_CODES.TASK_HISTORY_VIEW);
+    expect(checkedOnActive).not.toContain(PERMISSION_CODES.TRASH_VIEW);
+    expect(activeCaps.permissions.canViewHistory).toBe(false);
+
+    const softDeletedTaskDetail: TaskDetail = {
+      ...activeDetail,
+      task: {
+        ...activeDetail.task,
+        deletedAt: asIsoDateTime('2026-08-02T10:00:00.000Z'),
+      },
+    };
+    const checkedOnTrash: string[] = [];
+    const trashCanAllowTrashView: PermissionChecker = (permission) => {
+      checkedOnTrash.push(permission);
+      return permission === PERMISSION_CODES.TRASH_VIEW;
+    };
+    const trashCapsAllowed = buildTaskDetailCapabilities({
+      detail: softDeletedTaskDetail,
+      actorRole: ORGANIZATION_ROLES.ADMIN,
+      managedProjectIds: [],
+      impediments: [],
+      can: trashCanAllowTrashView,
+      policyConfig,
+    });
+    expect(checkedOnTrash).toContain(PERMISSION_CODES.TRASH_VIEW);
+    expect(checkedOnTrash).not.toContain(PERMISSION_CODES.TASK_HISTORY_VIEW);
+    expect(trashCapsAllowed.permissions.canViewHistory).toBe(true);
+
+    const trashCapsMemberDenied = buildTaskDetailCapabilities({
+      detail: softDeletedTaskDetail,
+      actorRole: ORGANIZATION_ROLES.MEMBER,
+      managedProjectIds: [],
+      impediments: [],
+      can: () => false,
+      policyConfig,
+    });
+    expect(trashCapsMemberDenied.permissions.canViewHistory).toBe(false);
+
+    const deletedProjectDetail: TaskDetail = {
+      ...softDeletedTaskDetail,
+      project: {
+        ...softDeletedTaskDetail.project,
+        deletedAt: asIsoDateTime('2026-08-03T10:00:00.000Z'),
+      },
+    };
+    const checkedOnDeletedProject: string[] = [];
+    const deletedProjectCaps = buildTaskDetailCapabilities({
+      detail: deletedProjectDetail,
+      actorRole: ORGANIZATION_ROLES.ADMIN,
+      managedProjectIds: [],
+      impediments: [],
+      can: (permission) => {
+        checkedOnDeletedProject.push(permission);
+        return false;
+      },
+      policyConfig,
+    });
+    expect(checkedOnDeletedProject).toContain(PERMISSION_CODES.TASK_HISTORY_VIEW);
+    expect(checkedOnDeletedProject).not.toContain(PERMISSION_CODES.TRASH_VIEW);
+    expect(deletedProjectCaps.permissions.canViewHistory).toBe(false);
+  });
 });
