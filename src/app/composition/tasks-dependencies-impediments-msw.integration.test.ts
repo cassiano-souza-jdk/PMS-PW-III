@@ -1,6 +1,8 @@
 import { IDBFactory, IDBKeyRange } from 'fake-indexeddb';
 import { setupServer, type SetupServer } from 'msw/node';
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { AUDIT_CATEGORIES } from '@/modules/audit';
+import { PERMISSION_CODES, PERMISSION_SCOPE_TYPES } from '@/modules/authorization';
 import type { Impediment } from '@/modules/impediments';
 import { IMPEDIMENT_CATEGORIES, IMPEDIMENT_STATUSES } from '@/modules/impediments';
 import type { TaskDependency, TaskDependencyListItem } from '@/modules/dependencies';
@@ -18,6 +20,7 @@ import {
   AuthenticationError,
   AuthorizationError,
   ConflictError,
+  InfrastructureError,
   ValidationError,
 } from '@/shared/errors';
 import {
@@ -25,6 +28,7 @@ import {
   PRIORITIES,
   TASK_STATUSES,
   asCorrelationId,
+  asEntityId,
   asIsoDateTime,
   type IsoDateTime,
 } from '@/shared/kernel';
@@ -395,5 +399,334 @@ describe('Phase 07 MSW Endpoints Integration (Tasks, Subtasks, Comments, Attachm
         { actorUserId: DEMO_MANAGER_USER_ID },
       ),
     ).toHaveLength(0);
+  });
+
+  it('valida Decisão Normativa B (Tags CRUD ADMIN-only, unicidade normalizada, atomicidade e PATCH parcial de MEMBER)', async () => {
+    const tag = await container.httpClient.post<Tag>(
+      `/organizations/${DEMO_ORG_ID}/tags`,
+      { name: 'Backend', colorToken: 'blue' },
+      { actorUserId: DEMO_ADMIN_USER_ID },
+    );
+
+    // Unicidade case-insensitive normalizada -> 409 ConflictError
+    await expect(
+      container.httpClient.post<Tag>(
+        `/organizations/${DEMO_ORG_ID}/tags`,
+        { name: '  backend  ', colorToken: 'red' },
+        { actorUserId: DEMO_ADMIN_USER_ID },
+      ),
+    ).rejects.toThrowError(ConflictError);
+
+    // MANAGER não pode editar nem excluir etiqueta (ADMIN-only -> 403)
+    await expect(
+      container.httpClient.patch<Tag>(
+        `/organizations/${DEMO_ORG_ID}/tags/${tag.id}`,
+        { name: 'Backend API' },
+        { actorUserId: DEMO_MANAGER_USER_ID },
+      ),
+    ).rejects.toThrowError(AuthorizationError);
+
+    await expect(
+      container.httpClient.delete(`/organizations/${DEMO_ORG_ID}/tags/${tag.id}`, {
+        actorUserId: DEMO_MANAGER_USER_ID,
+      }),
+    ).rejects.toThrowError(AuthorizationError);
+
+    // MEMBER pode atualizar somente tags da tarefa acessível, mas alteração concorrente de priority falha com 403
+    const updatedByMember = await container.httpClient.patch<Task>(
+      `/organizations/${DEMO_ORG_ID}/tasks/${DEMO_TASK_IDS.FOUNDATION_TASK}`,
+      { tagIds: [tag.id] },
+      { actorUserId: DEMO_MEMBER_USER_ID },
+    );
+    expect(updatedByMember.tagIds).toEqual([tag.id]);
+
+    const originalPriority = updatedByMember.priority;
+    await expect(
+      container.httpClient.patch<Task>(
+        `/organizations/${DEMO_ORG_ID}/tasks/${DEMO_TASK_IDS.FOUNDATION_TASK}`,
+        {
+          tagIds: [],
+          priority: originalPriority === PRIORITIES.HIGH ? PRIORITIES.LOW : PRIORITIES.HIGH,
+        },
+        { actorUserId: DEMO_MEMBER_USER_ID },
+      ),
+    ).rejects.toThrowError(AuthorizationError);
+
+    const detailAfterDenied = await container.httpClient.get<TaskDetail>(
+      `/organizations/${DEMO_ORG_ID}/tasks/${DEMO_TASK_IDS.FOUNDATION_TASK}`,
+      { actorUserId: DEMO_MEMBER_USER_ID },
+    );
+    expect(detailAfterDenied.task.tagIds).toEqual([tag.id]);
+    expect(detailAfterDenied.task.priority).toBe(originalPriority);
+
+    // ADMIN atualiza e exclui etiqueta removendo tagId atomicamente das tarefas vinculadas
+    const renamedTag = await container.httpClient.patch<Tag>(
+      `/organizations/${DEMO_ORG_ID}/tags/${tag.id}`,
+      { name: 'Backend Core', colorToken: 'teal' },
+      { actorUserId: DEMO_ADMIN_USER_ID },
+    );
+    expect(renamedTag.name).toBe('Backend Core');
+
+    await container.httpClient.delete(`/organizations/${DEMO_ORG_ID}/tags/${tag.id}`, {
+      actorUserId: DEMO_ADMIN_USER_ID,
+    });
+
+    const detailAfterTagDelete = await container.httpClient.get<TaskDetail>(
+      `/organizations/${DEMO_ORG_ID}/tasks/${DEMO_TASK_IDS.FOUNDATION_TASK}`,
+      { actorUserId: DEMO_MEMBER_USER_ID },
+    );
+    expect(detailAfterTagDelete.task.tagIds).toEqual([]);
+  });
+
+  it('valida ciclo indireto de 3 tarefas (A→B→C→A) e exceção de conclusão com dependência pendente via MSW', async () => {
+    const taskC = await container.httpClient.post<Task>(
+      `/organizations/${DEMO_ORG_ID}/projects/${DEMO_PROJECT_ID}/tasks`,
+      {
+        title: 'Tarefa C Cadeia MSW',
+        priority: PRIORITIES.HIGH,
+      },
+      { actorUserId: DEMO_MANAGER_USER_ID },
+    );
+
+    // A (FOUNDATION_TASK) -> B (KANBAN_FLOW_TASK) -> C (taskC)
+    await container.httpClient.post<TaskDependency>(
+      `/organizations/${DEMO_ORG_ID}/tasks/${DEMO_TASK_IDS.FOUNDATION_TASK}/dependencies`,
+      { dependsOnTaskId: DEMO_TASK_IDS.KANBAN_FLOW_TASK, required: true },
+      { actorUserId: DEMO_MANAGER_USER_ID },
+    );
+    await container.httpClient.post<TaskDependency>(
+      `/organizations/${DEMO_ORG_ID}/tasks/${DEMO_TASK_IDS.KANBAN_FLOW_TASK}/dependencies`,
+      { dependsOnTaskId: taskC.id, required: true },
+      { actorUserId: DEMO_MANAGER_USER_ID },
+    );
+
+    // Ciclo indireto C -> A rejeitado com 409 ConflictError
+    await expect(
+      container.httpClient.post<TaskDependency>(
+        `/organizations/${DEMO_ORG_ID}/tasks/${taskC.id}/dependencies`,
+        { dependsOnTaskId: DEMO_TASK_IDS.FOUNDATION_TASK, required: true },
+        { actorUserId: DEMO_MANAGER_USER_ID },
+      ),
+    ).rejects.toThrowError(ConflictError);
+
+    // Conclusão sem justificativa falha (409); MEMBER com justificativa falha (403); MANAGER com justificativa conclui + audita
+    await expect(
+      container.httpClient.post<Task>(
+        `/organizations/${DEMO_ORG_ID}/tasks/${DEMO_TASK_IDS.FOUNDATION_TASK}/complete`,
+        {},
+        { actorUserId: DEMO_MANAGER_USER_ID },
+      ),
+    ).rejects.toThrowError(ConflictError);
+
+    await expect(
+      container.httpClient.post<Task>(
+        `/organizations/${DEMO_ORG_ID}/tasks/${DEMO_TASK_IDS.FOUNDATION_TASK}/complete`,
+        { dependencyOverrideJustification: 'Tentativa sem permissão DEPENDENCY_MANAGE' },
+        { actorUserId: DEMO_MEMBER_USER_ID },
+      ),
+    ).rejects.toThrowError(AuthorizationError);
+
+    const completed = await container.httpClient.post<Task>(
+      `/organizations/${DEMO_ORG_ID}/tasks/${DEMO_TASK_IDS.FOUNDATION_TASK}/complete`,
+      { dependencyOverrideJustification: 'Aprovação excepcional de release via MSW' },
+      { actorUserId: DEMO_MANAGER_USER_ID },
+    );
+    expect(completed.status).toBe(TASK_STATUSES.DONE);
+
+    const taskAudit = await container.repositories.audit.auditEvents.listByOrganization(
+      DEMO_ORG_ID,
+      { page: 1, pageSize: 100 },
+      { category: AUDIT_CATEGORIES.TASK },
+    );
+    expect(
+      taskAudit.items.some(
+        (event) =>
+          event.eventType === 'task.completed' &&
+          event.resourceId === (DEMO_TASK_IDS.FOUNDATION_TASK as string) &&
+          event.justification === 'Aprovação excepcional de release via MSW',
+      ),
+    ).toBe(true);
+  });
+
+  it('valida anexos via MSW: revalidação de TASK_VIEW após perda de acesso, payload vazio (422), QuotaExceededError não-destrutivo e exclusão', async () => {
+    const restrictedTask = await container.httpClient.post<Task>(
+      `/organizations/${DEMO_ORG_ID}/projects/${DEMO_PROJECT_ID}/tasks`,
+      {
+        title: 'Tarefa Restrita Anexo MSW',
+        priority: PRIORITIES.HIGH,
+        assigneeId: DEMO_MANAGER_USER_ID,
+      },
+      { actorUserId: DEMO_MANAGER_USER_ID },
+    );
+
+    await container.httpClient.post(
+      `/organizations/${DEMO_ORG_ID}/tasks/${restrictedTask.id}/participants`,
+      { userId: DEMO_MEMBER_USER_ID },
+      { actorUserId: DEMO_MANAGER_USER_ID },
+    );
+
+    // Payload vazio -> 422 ValidationError
+    await expect(
+      container.httpClient.post<TaskAttachment>(
+        `/organizations/${DEMO_ORG_ID}/tasks/${restrictedTask.id}/attachments`,
+        {
+          fileName: 'vazio.txt',
+          mimeType: 'text/plain',
+          contentBase64: '',
+        },
+        { actorUserId: DEMO_MEMBER_USER_ID },
+      ),
+    ).rejects.toThrowError(ValidationError);
+
+    const rawBytes = new TextEncoder().encode('Evidência inicial intacta');
+    const validBase64 = globalThis.btoa(String.fromCharCode(...rawBytes));
+    const uploaded = await container.httpClient.post<TaskAttachment>(
+      `/organizations/${DEMO_ORG_ID}/tasks/${restrictedTask.id}/attachments`,
+      {
+        fileName: 'evidencia.txt',
+        mimeType: 'text/plain',
+        contentBase64: validBase64,
+      },
+      { actorUserId: DEMO_MEMBER_USER_ID },
+    );
+
+    const downloadedBeforeRevoke = await container.httpClient.get<{
+      readonly attachment: TaskAttachment;
+      readonly mimeType: string;
+      readonly contentBase64: string;
+    }>(
+      `/organizations/${DEMO_ORG_ID}/tasks/${restrictedTask.id}/attachments/${uploaded.id}/content`,
+      { actorUserId: DEMO_MEMBER_USER_ID },
+    );
+    expect(downloadedBeforeRevoke.contentBase64).toBe(validBase64);
+
+    // QuotaExceededError na gravação do blob rejeita com InfrastructureError preservando o anexo existente
+    vi.spyOn(container.attachmentBlobStore, 'putBlob').mockRejectedValueOnce(
+      new DOMException('Quota exceeded', 'QuotaExceededError'),
+    );
+
+    let quotaError: unknown = null;
+    try {
+      await container.httpClient.post<TaskAttachment>(
+        `/organizations/${DEMO_ORG_ID}/tasks/${restrictedTask.id}/attachments`,
+        {
+          fileName: 'falha-cota.txt',
+          mimeType: 'text/plain',
+          contentBase64: validBase64,
+        },
+        { actorUserId: DEMO_MEMBER_USER_ID },
+      );
+    } catch (error) {
+      quotaError = error;
+    }
+    expect(quotaError).toBeInstanceOf(InfrastructureError);
+
+    const detailAfterQuota = await container.httpClient.get<TaskDetail>(
+      `/organizations/${DEMO_ORG_ID}/tasks/${restrictedTask.id}`,
+      { actorUserId: DEMO_MANAGER_USER_ID },
+    );
+    expect(detailAfterQuota.attachments).toHaveLength(1);
+    expect(detailAfterQuota.attachments[0]?.id).toBe(uploaded.id);
+
+    // Remoção de participação revoga acesso e revalidação de download retorna 403 AuthorizationError
+    await container.httpClient.delete(
+      `/organizations/${DEMO_ORG_ID}/tasks/${restrictedTask.id}/participants/${DEMO_MEMBER_USER_ID}`,
+      { actorUserId: DEMO_MANAGER_USER_ID },
+    );
+
+    await expect(
+      container.httpClient.get(
+        `/organizations/${DEMO_ORG_ID}/tasks/${restrictedTask.id}/attachments/${uploaded.id}/content`,
+        { actorUserId: DEMO_MEMBER_USER_ID },
+      ),
+    ).rejects.toThrowError(AuthorizationError);
+
+    await container.httpClient.delete(
+      `/organizations/${DEMO_ORG_ID}/tasks/${restrictedTask.id}/attachments/${uploaded.id}`,
+      { actorUserId: DEMO_MANAGER_USER_ID },
+    );
+
+    const detailAfterDelete = await container.httpClient.get<TaskDetail>(
+      `/organizations/${DEMO_ORG_ID}/tasks/${restrictedTask.id}`,
+      { actorUserId: DEMO_MANAGER_USER_ID },
+    );
+    expect(detailAfterDelete.attachments).toHaveLength(0);
+  });
+
+  it('valida DELETE /tasks revogando grants RESOURCE em taskId e bloqueio 409 de DELETE e RESTORE em projeto arquivado', async () => {
+    const taskA = await container.httpClient.post<Task>(
+      `/organizations/${DEMO_ORG_ID}/projects/${DEMO_PROJECT_ID}/tasks`,
+      {
+        title: 'Tarefa Grant & Arquivo MSW',
+        priority: PRIORITIES.HIGH,
+      },
+      { actorUserId: DEMO_MANAGER_USER_ID },
+    );
+    const taskB = await container.httpClient.post<Task>(
+      `/organizations/${DEMO_ORG_ID}/projects/${DEMO_PROJECT_ID}/tasks`,
+      {
+        title: 'Tarefa Soft-Deleted Antes do Arquivo',
+        priority: PRIORITIES.HIGH,
+      },
+      { actorUserId: DEMO_MANAGER_USER_ID },
+    );
+
+    await container.services.authorization.grantPermission(DEMO_ADMIN_USER_ID, DEMO_ORG_ID, {
+      granteeUserId: DEMO_MEMBER_USER_ID,
+      permission: PERMISSION_CODES.TASK_COMMENT,
+      scopeType: PERMISSION_SCOPE_TYPES.RESOURCE,
+      scopeId: asEntityId(taskA.id),
+      reason: 'Concessão temporária em tarefa específica para auditoria',
+    });
+
+    const deletedA = await container.httpClient.delete<Task>(
+      `/organizations/${DEMO_ORG_ID}/tasks/${taskA.id}`,
+      { actorUserId: DEMO_MANAGER_USER_ID },
+    );
+    expect(deletedA.deletedAt).toBeDefined();
+
+    const memberGrants = await container.repositories.authorization.permissionGrants.listByGrantee(
+      DEMO_ORG_ID,
+      DEMO_MEMBER_USER_ID,
+    );
+    const taskAGrant = memberGrants.find(
+      (grant) =>
+        grant.scopeType === PERMISSION_SCOPE_TYPES.RESOURCE &&
+        (grant.scopeId as string | undefined) === (taskA.id as string),
+    );
+    expect(taskAGrant?.revokedAt).toBeDefined();
+
+    // Restaura A e exclui B antes do arquivamento do projeto
+    const restoredA = await container.httpClient.post<Task>(
+      `/organizations/${DEMO_ORG_ID}/tasks/${taskA.id}/restore`,
+      {},
+      { actorUserId: DEMO_MANAGER_USER_ID },
+    );
+    expect(restoredA.deletedAt).toBeUndefined();
+
+    await container.httpClient.delete<Task>(`/organizations/${DEMO_ORG_ID}/tasks/${taskB.id}`, {
+      actorUserId: DEMO_MANAGER_USER_ID,
+    });
+
+    // Arquiva projeto -> DELETE em taskA e RESTORE em taskB retornam 409 ConflictError
+    await container.services.projects.archiveProject(
+      DEMO_ADMIN_USER_ID,
+      DEMO_ORG_ID,
+      DEMO_PROJECT_ID,
+    );
+
+    await expect(
+      container.httpClient.delete(`/organizations/${DEMO_ORG_ID}/tasks/${taskA.id}`, {
+        actorUserId: DEMO_MANAGER_USER_ID,
+      }),
+    ).rejects.toThrowError(ConflictError);
+
+    await expect(
+      container.httpClient.post(
+        `/organizations/${DEMO_ORG_ID}/tasks/${taskB.id}/restore`,
+        {},
+        { actorUserId: DEMO_MANAGER_USER_ID },
+      ),
+    ).rejects.toThrowError(ConflictError);
   });
 });
