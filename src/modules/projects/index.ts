@@ -5,6 +5,7 @@ export {
   assertParticipantRemovalHandled,
   assertProjectOperational,
   type Project,
+  type ProjectBottleneckThresholds,
   type ProjectMember,
   type ProjectMemberId,
   type ProjectMemberRole,

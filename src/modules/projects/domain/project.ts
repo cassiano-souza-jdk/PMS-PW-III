@@ -6,11 +6,14 @@ import {
   type Brand,
   type IsoDateTime,
   type OrganizationScoped,
+  type ProjectBottleneckThresholds,
   type ProjectId,
   type SoftDeletable,
   type TeamId,
   type UserId,
 } from '@/shared/kernel';
+
+export type { ProjectBottleneckThresholds };
 
 export type ProjectMemberId = Brand<string, 'ProjectMemberId'>;
 
@@ -40,6 +43,7 @@ export interface Project extends OrganizationScoped, AuditableTimestamps, SoftDe
   readonly status: ProjectStatus;
   readonly ownerUserId: UserId;
   readonly inactivityThresholdDays: number;
+  readonly bottleneckThresholds?: ProjectBottleneckThresholds;
   readonly archivedAt?: IsoDateTime;
   readonly createdByUserId: UserId;
 }

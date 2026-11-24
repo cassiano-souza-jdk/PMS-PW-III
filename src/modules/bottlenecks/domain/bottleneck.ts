@@ -13,12 +13,15 @@ import {
   type OrganizationId,
   type OrganizationScoped,
   type Priority,
+  type ProjectBottleneckThresholds,
   type ProjectId,
   type SubtaskId,
   type TaskId,
   type TaskStatus,
   type UserId,
 } from '@/shared/kernel';
+
+export type { ProjectBottleneckThresholds };
 
 export type BottleneckAlertId = Brand<string, 'BottleneckAlertId'>;
 
@@ -100,6 +103,25 @@ export const DEFAULT_WORKLOAD_WEIGHTS: Readonly<WorkloadScoringWeights> = Object
 
 /** Initial paused-task workload reduction factor (50%, subject to calibration — PRD.md §12.3). */
 export const DEFAULT_PAUSED_WORKLOAD_FACTOR = 0.5;
+
+export type ResolvedProjectBottleneckThresholds = Readonly<Required<ProjectBottleneckThresholds>>;
+
+/**
+ * Deterministic per-project bottleneck thresholds fallback (PRD.md §12.2, ADR-0012 DN-03).
+ * Used whenever `Project.bottleneckThresholds` or any individual field is `undefined`.
+ */
+export const DEFAULT_PROJECT_BOTTLENECK_THRESHOLDS: ResolvedProjectBottleneckThresholds =
+  Object.freeze({
+    wipUtilizationPercent: 80,
+    inactivityWarningCount: 2,
+    inactivityCriticalCount: 5,
+    overdueWarningCount: 1,
+    overdueCriticalCount: 3,
+    blockedWarningCount: 1,
+    blockedCriticalCount: 3,
+    overloadHighScore: 50,
+    overloadCriticalScore: 75,
+  });
 
 export interface WorkloadTaskSnapshot {
   readonly taskId: TaskId;
@@ -396,4 +418,121 @@ export function upsertBottleneckAlert(
     lastSeenAt: now,
     occurrenceCount: 1,
   });
+}
+
+function assertBoundedInteger(
+  value: number | undefined,
+  field: keyof ProjectBottleneckThresholds,
+  min: number,
+  max?: number,
+): void {
+  if (value === undefined) {
+    return;
+  }
+
+  if (!Number.isInteger(value) || value < min || (max !== undefined && value > max)) {
+    const rangeMessage = max !== undefined ? `within [${min}, ${max}]` : `>= ${min}`;
+    throw new ValidationError(
+      `Bottleneck threshold "${field}" must be an integer ${rangeMessage}.`,
+      {
+        details: { field, value, min, ...(max !== undefined ? { max } : {}) },
+      },
+    );
+  }
+}
+
+function assertThresholdOrder(
+  lower: number | undefined,
+  upper: number | undefined,
+  lowerField: keyof ProjectBottleneckThresholds,
+  upperField: keyof ProjectBottleneckThresholds,
+): void {
+  if (lower !== undefined && upper !== undefined && lower > upper) {
+    throw new ValidationError(
+      `Bottleneck threshold "${lowerField}" (${lower}) cannot exceed "${upperField}" (${upper}).`,
+      {
+        details: { field: lowerField, relatedField: upperField, lower, upper },
+      },
+    );
+  }
+}
+
+/**
+ * Validates optional or complete per-project bottleneck thresholds (`ValidationError` on invalid bounds or inverted pairs).
+ */
+export function assertValidProjectBottleneckThresholds(
+  thresholds: ProjectBottleneckThresholds,
+): void {
+  assertBoundedInteger(thresholds.wipUtilizationPercent, 'wipUtilizationPercent', 1, 100);
+  assertBoundedInteger(thresholds.inactivityWarningCount, 'inactivityWarningCount', 1);
+  assertBoundedInteger(thresholds.inactivityCriticalCount, 'inactivityCriticalCount', 1);
+  assertBoundedInteger(thresholds.overdueWarningCount, 'overdueWarningCount', 1);
+  assertBoundedInteger(thresholds.overdueCriticalCount, 'overdueCriticalCount', 1);
+  assertBoundedInteger(thresholds.blockedWarningCount, 'blockedWarningCount', 1);
+  assertBoundedInteger(thresholds.blockedCriticalCount, 'blockedCriticalCount', 1);
+  assertBoundedInteger(thresholds.overloadHighScore, 'overloadHighScore', 1, 100);
+  assertBoundedInteger(thresholds.overloadCriticalScore, 'overloadCriticalScore', 1, 100);
+
+  assertThresholdOrder(
+    thresholds.inactivityWarningCount,
+    thresholds.inactivityCriticalCount,
+    'inactivityWarningCount',
+    'inactivityCriticalCount',
+  );
+  assertThresholdOrder(
+    thresholds.overdueWarningCount,
+    thresholds.overdueCriticalCount,
+    'overdueWarningCount',
+    'overdueCriticalCount',
+  );
+  assertThresholdOrder(
+    thresholds.blockedWarningCount,
+    thresholds.blockedCriticalCount,
+    'blockedWarningCount',
+    'blockedCriticalCount',
+  );
+  assertThresholdOrder(
+    thresholds.overloadHighScore,
+    thresholds.overloadCriticalScore,
+    'overloadHighScore',
+    'overloadCriticalScore',
+  );
+}
+
+/**
+ * Resolves `Project.bottleneckThresholds?` with deterministic domain defaults (`DEFAULT_PROJECT_BOTTLENECK_THRESHOLDS`)
+ * and validates the resulting threshold configuration.
+ */
+export function normalizeProjectBottleneckThresholds(
+  thresholds?: ProjectBottleneckThresholds,
+): ResolvedProjectBottleneckThresholds {
+  const resolved: ResolvedProjectBottleneckThresholds = Object.freeze({
+    wipUtilizationPercent:
+      thresholds?.wipUtilizationPercent ??
+      DEFAULT_PROJECT_BOTTLENECK_THRESHOLDS.wipUtilizationPercent,
+    inactivityWarningCount:
+      thresholds?.inactivityWarningCount ??
+      DEFAULT_PROJECT_BOTTLENECK_THRESHOLDS.inactivityWarningCount,
+    inactivityCriticalCount:
+      thresholds?.inactivityCriticalCount ??
+      DEFAULT_PROJECT_BOTTLENECK_THRESHOLDS.inactivityCriticalCount,
+    overdueWarningCount:
+      thresholds?.overdueWarningCount ?? DEFAULT_PROJECT_BOTTLENECK_THRESHOLDS.overdueWarningCount,
+    overdueCriticalCount:
+      thresholds?.overdueCriticalCount ??
+      DEFAULT_PROJECT_BOTTLENECK_THRESHOLDS.overdueCriticalCount,
+    blockedWarningCount:
+      thresholds?.blockedWarningCount ?? DEFAULT_PROJECT_BOTTLENECK_THRESHOLDS.blockedWarningCount,
+    blockedCriticalCount:
+      thresholds?.blockedCriticalCount ??
+      DEFAULT_PROJECT_BOTTLENECK_THRESHOLDS.blockedCriticalCount,
+    overloadHighScore:
+      thresholds?.overloadHighScore ?? DEFAULT_PROJECT_BOTTLENECK_THRESHOLDS.overloadHighScore,
+    overloadCriticalScore:
+      thresholds?.overloadCriticalScore ??
+      DEFAULT_PROJECT_BOTTLENECK_THRESHOLDS.overloadCriticalScore,
+  });
+
+  assertValidProjectBottleneckThresholds(resolved);
+  return resolved;
 }
