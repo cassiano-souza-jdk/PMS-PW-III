@@ -30,3 +30,34 @@ export {
   type WorkloadTaskSnapshot,
 } from './domain/bottleneck';
 export type { BottleneckAlertRepositoryPort } from './application/ports/bottleneck-repository.port';
+export type {
+  BottleneckActorProjectScopes,
+  BottleneckBoardColumnSnapshot,
+  BottleneckProjectMemberSnapshot,
+  BottleneckProjectSummary,
+  BottleneckProjectWorkData,
+  BottleneckSubtaskSnapshot,
+  BottleneckTaskSnapshot,
+  BottleneckUserWorkData,
+  BottleneckWorkContextPort,
+  UpdateProjectBottleneckRulesRecordInput,
+} from './application/ports/bottleneck-work-context.port';
+export {
+  BottleneckService,
+  type BottleneckOperationOptions,
+  type BottleneckServiceDependencies,
+  type BottleneckTaskSummaryItem,
+  type EvaluateProjectBottlenecksResult,
+  type IndividualProductivityVisibilityResult,
+  type ListOrganizationAlertsFilters,
+  type MyWorkloadOperationalBreakdown,
+  type MyWorkloadSummary,
+  type OrganizationBottleneckAlertsResult,
+  type ProjectBottleneckRulesResult,
+  type ProjectBottlenecksIndicators,
+  type ProjectBottlenecksOverview,
+  type ProjectMemberWorkloadEntry,
+  type UpdateIndividualProductivityVisibilityInput,
+  type UpdateProjectBottleneckRulesInput,
+  type WipColumnBottleneckStatus,
+} from './application/services/bottleneck-service';

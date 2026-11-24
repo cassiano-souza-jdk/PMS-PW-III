@@ -9,7 +9,9 @@ import {
   InMemoryEphemeralSessionPointer,
 } from '@/modules/authentication/infrastructure/session/ephemeral-session-pointer';
 import { AuthorizationManagementService } from '@/modules/authorization';
+import { BottleneckService } from '@/modules/bottlenecks';
 import { DependencyService } from '@/modules/dependencies';
+import { FocusService } from '@/modules/focus';
 import { ImpedimentService } from '@/modules/impediments';
 import { InvitationService } from '@/modules/invitations';
 import { KanbanService } from '@/modules/kanban';
@@ -57,6 +59,10 @@ import {
   createImpedimentWorkContextAdapter,
   createTaskProjectContextAdapter,
 } from './task-ports-adapter';
+import {
+  createBottleneckWorkContextAdapter,
+  createFocusWorkContextAdapter,
+} from './work-intelligence-ports-adapter';
 
 export interface AppServicesRegistry {
   readonly auth: AuthService;
@@ -69,6 +75,8 @@ export interface AppServicesRegistry {
   readonly tasks: TaskService;
   readonly dependencies: DependencyService;
   readonly impediments: ImpedimentService;
+  readonly focus: FocusService;
+  readonly bottlenecks: BottleneckService;
   readonly authorization: AuthorizationManagementService;
 }
 
@@ -316,6 +324,35 @@ export function createAppContainer(
       impediments: new ImpedimentService({
         impediments: resolvedRepositories.impediments.impediments,
         workContext: createImpedimentWorkContextAdapter(resolvedRepositories),
+        organizationMembers: resolvedRepositories.organizations.organizationMembers,
+        organizationSettings: resolvedRepositories.settings.organizationSettings,
+        permissionGrants: resolvedRepositories.authorization.permissionGrants,
+        explicitDenyRules: resolvedRepositories.authorization.explicitDenyRules,
+        auditEvents: resolvedRepositories.audit.auditEvents,
+        transactionPort: resolvedTransactionPort,
+        eventBus: resolvedEventBus,
+        logger: resolvedLogger,
+        ...(options.now !== undefined ? { now: options.now } : {}),
+        ...(options.generateUuid !== undefined ? { generateUuid: options.generateUuid } : {}),
+      }),
+      focus: new FocusService({
+        focusPreferences: resolvedRepositories.focus.focusPreferences,
+        workContext: createFocusWorkContextAdapter(resolvedRepositories),
+        organizations: resolvedRepositories.organizations.organizations,
+        organizationMembers: resolvedRepositories.organizations.organizationMembers,
+        organizationSettings: resolvedRepositories.settings.organizationSettings,
+        permissionGrants: resolvedRepositories.authorization.permissionGrants,
+        explicitDenyRules: resolvedRepositories.authorization.explicitDenyRules,
+        transactionPort: resolvedTransactionPort,
+        eventBus: resolvedEventBus,
+        logger: resolvedLogger,
+        ...(options.now !== undefined ? { now: options.now } : {}),
+        ...(options.generateUuid !== undefined ? { generateUuid: options.generateUuid } : {}),
+      }),
+      bottlenecks: new BottleneckService({
+        bottleneckAlerts: resolvedRepositories.bottlenecks.bottleneckAlerts,
+        workContext: createBottleneckWorkContextAdapter(resolvedRepositories),
+        organizations: resolvedRepositories.organizations.organizations,
         organizationMembers: resolvedRepositories.organizations.organizationMembers,
         organizationSettings: resolvedRepositories.settings.organizationSettings,
         permissionGrants: resolvedRepositories.authorization.permissionGrants,
