@@ -57,7 +57,7 @@ function TaskSummaryList({ tasks }: { readonly tasks: readonly BottleneckTaskSum
             <p className="font-medium text-foreground">{task.title}</p>
             <p className="text-muted-foreground">
               {intl.formatMessage(
-                { id: 'tasks.lastMovedAtLabel' },
+                { id: 'tasks.fields.lastMovedLabel' },
                 { date: intl.formatDate(new Date(task.lastMovedAt), { dateStyle: 'short' }) },
               )}
             </p>
