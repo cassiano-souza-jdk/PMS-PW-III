@@ -119,6 +119,12 @@ describe('Projects, Participants & Kanban Presentation + Routing + Accessibility
         const primaryNav = screen.getByRole('navigation', {
           name: ptBRMessages['nav.primaryLabel'],
         });
+        expect(
+          within(primaryNav).getByRole('link', { name: ptBRMessages['nav.focus'] }),
+        ).toHaveAttribute('href', '/focus');
+        expect(
+          within(primaryNav).getByRole('link', { name: ptBRMessages['nav.bottlenecks'] }),
+        ).toHaveAttribute('href', '/bottlenecks');
 
         // 1. Navega para /projects
         await user.click(
@@ -621,6 +627,13 @@ describe('Projects, Participants & Kanban Presentation + Routing + Accessibility
         name: ptBRMessages['projects.openTasksAction'],
       });
       expect(projectsTasksLink).toHaveAttribute('href', `/projects/${DEMO_PROJECT_ID}/tasks`);
+      const projectsBottlenecksLinks = await screen.findAllByRole('link', {
+        name: ptBRMessages['projects.openBottlenecksAction'],
+      });
+      expect(projectsBottlenecksLinks[0]).toHaveAttribute(
+        'href',
+        `/projects/${DEMO_PROJECT_ID}/bottlenecks`,
+      );
 
       const openBoardButtons = screen.getAllByRole('button', {
         name: ptBRMessages['projects.openBoardAction'],
@@ -632,11 +645,18 @@ describe('Projects, Participants & Kanban Presentation + Routing + Accessibility
         name: 'Quadro Kanban — Lancamento Plataforma PMS v1',
       });
 
-      // Link de Lista de tarefas no cabeçalho do quadro Kanban
+      // Link de Lista de tarefas e Gargalos do projeto no cabeçalho do quadro Kanban
       const boardTaskListLink = screen.getByRole('link', {
         name: ptBRMessages['kanban.openTaskListAction'],
       });
       expect(boardTaskListLink).toHaveAttribute('href', `/projects/${DEMO_PROJECT_ID}/tasks`);
+      const boardBottlenecksLink = screen.getByRole('link', {
+        name: ptBRMessages['kanban.openBottlenecksAction'],
+      });
+      expect(boardBottlenecksLink).toHaveAttribute(
+        'href',
+        `/projects/${DEMO_PROJECT_ID}/bottlenecks`,
+      );
 
       // Link de detalhes no cartão Kanban estritamente fora da alça de arrasto do @dnd-kit
       const pausedTitle = 'Validar persistencia local Dexie e isolamento multi-organizacao';
@@ -835,6 +855,132 @@ describe('Projects, Participants & Kanban Presentation + Routing + Accessibility
       expect(
         screen.getByRole('link', { name: ptBRMessages['projects.openTasksAction'] }),
       ).toHaveAttribute('href', `/projects/${allowedProject.id}/tasks`);
+      expect(await axe(container)).toHaveNoViolations();
+    },
+  );
+
+  it(
+    'aplica simetria de BOTTLENECK_VIEW nos links contextuais de gargalos (lista/detalhe de projetos e cabeçalho do Kanban) quando ExplicitDenyRule bloqueia o projeto demo (0 violações vitest-axe)',
+    { timeout: 25_000 },
+    async () => {
+      const user = userEvent.setup();
+      const appContainer = await createIsolatedContainer();
+      await appContainer.seedDemoOrganization();
+
+      const allowedProject = await appContainer.services.projects.createProject(
+        DEMO_ADMIN_USER_ID,
+        DEMO_ORG_ID,
+        {
+          name: 'Projeto Secundário Com Gargalos',
+        },
+      );
+      await appContainer.services.projects.addProjectParticipant(
+        DEMO_ADMIN_USER_ID,
+        DEMO_ORG_ID,
+        allowedProject.id,
+        DEMO_MEMBER_USER_ID,
+        PROJECT_MEMBER_ROLES.PARTICIPANT,
+      );
+      await appContainer.services.authorization.createExplicitDenyRule(
+        DEMO_ADMIN_USER_ID,
+        DEMO_ORG_ID,
+        {
+          targetUserId: DEMO_MEMBER_USER_ID,
+          permission: PERMISSION_CODES.BOTTLENECK_VIEW,
+          scopeType: PERMISSION_SCOPE_TYPES.PROJECT,
+          scopeId: asEntityId(DEMO_PROJECT_ID),
+          reason: 'Teste de simetria BOTTLENECK_VIEW em Projetos e Kanban',
+        },
+      );
+
+      const { container, router } = await renderIsolatedApp('/demo', appContainer);
+      await screen.findByRole('heading', {
+        level: 1,
+        name: ptBRMessages['auth.demo.title'],
+      });
+      await user.click(screen.getByRole('button', { name: 'Entrar como Membro' }));
+      await screen.findByRole('heading', {
+        level: 1,
+        name: ptBRMessages['organizations.title'],
+      });
+
+      const primaryNav = screen.getByRole('navigation', {
+        name: ptBRMessages['nav.primaryLabel'],
+      });
+      expect(
+        within(primaryNav).getByRole('link', { name: ptBRMessages['nav.focus'] }),
+      ).toHaveAttribute('href', '/focus');
+      expect(
+        within(primaryNav).getByRole('link', { name: ptBRMessages['nav.bottlenecks'] }),
+      ).toHaveAttribute('href', '/bottlenecks');
+
+      await user.click(
+        within(primaryNav).getByRole('link', { name: ptBRMessages['nav.projects'] }),
+      );
+
+      await screen.findByRole('button', { name: /Lancamento Plataforma PMS v1/ });
+      await screen.findByRole('button', { name: /Projeto Secundário Com Gargalos/ });
+
+      const deniedListItem = screen
+        .getByRole('button', { name: /Lancamento Plataforma PMS v1/ })
+        .closest('li')!;
+      const allowedListItem = screen
+        .getByRole('button', { name: /Projeto Secundário Com Gargalos/ })
+        .closest('li')!;
+
+      // Projeto com BOTTLENECK_VIEW negado NÃO exibe link de gargalos na lista lateral
+      expect(
+        within(deniedListItem).queryByRole('link', {
+          name: ptBRMessages['projects.openBottlenecksAction'],
+        }),
+      ).not.toBeInTheDocument();
+      expect(
+        within(allowedListItem).getByRole('link', {
+          name: ptBRMessages['projects.openBottlenecksAction'],
+        }),
+      ).toHaveAttribute('href', `/projects/${allowedProject.id}/bottlenecks`);
+
+      // Seleciona o projeto negado -> detalhe também oculta link de gargalos (apenas o item permitido permanece visível)
+      await user.click(
+        within(deniedListItem).getByRole('button', { name: /Lancamento Plataforma PMS v1/ }),
+      );
+      await waitFor(() => {
+        expect(
+          screen.getAllByRole('link', { name: ptBRMessages['projects.openBottlenecksAction'] }),
+        ).toHaveLength(1);
+      });
+
+      // Seleciona o projeto permitido -> exibe link na lista lateral e no painel de detalhe
+      await user.click(
+        within(allowedListItem).getByRole('button', { name: /Projeto Secundário Com Gargalos/ }),
+      );
+      await waitFor(() => {
+        expect(
+          screen.getAllByRole('link', { name: ptBRMessages['projects.openBottlenecksAction'] }),
+        ).toHaveLength(2);
+      });
+      expect(await axe(container)).toHaveNoViolations();
+
+      // No quadro Kanban do projeto negado, cabeçalho oculta link de gargalos
+      await router.navigate(`/projects/${DEMO_PROJECT_ID}/board`);
+      await screen.findByRole('heading', {
+        level: 1,
+        name: 'Quadro Kanban — Lancamento Plataforma PMS v1',
+      });
+      expect(
+        screen.queryByRole('link', { name: ptBRMessages['kanban.openBottlenecksAction'] }),
+      ).not.toBeInTheDocument();
+      expect(await axe(container)).toHaveNoViolations();
+
+      // No quadro Kanban do projeto permitido, cabeçalho exibe link de gargalos
+      await router.navigate(`/projects/${allowedProject.id}/board`);
+      await screen.findByRole('heading', {
+        level: 1,
+        name: 'Quadro Kanban — Projeto Secundário Com Gargalos',
+      });
+      expect(
+        screen.getByRole('link', { name: ptBRMessages['kanban.openBottlenecksAction'] }),
+      ).toHaveAttribute('href', `/projects/${allowedProject.id}/bottlenecks`);
       expect(await axe(container)).toHaveNoViolations();
     },
   );

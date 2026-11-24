@@ -350,16 +350,39 @@ export function ProjectsPage() {
       projectArchivedAt: project.archivedAt,
     });
 
+  const canViewProjectBottlenecks = (
+    project: Pick<
+      ProjectListItem,
+      'id' | 'organizationId' | 'teamId' | 'ownerUserId' | 'deletedAt' | 'archivedAt'
+    >,
+  ): boolean =>
+    can(PERMISSION_CODES.BOTTLENECK_VIEW, {
+      kind: 'BOTTLENECK',
+      id: asEntityId(project.id),
+      exists: true,
+      organizationId: project.organizationId,
+      projectId: project.id,
+      teamId: project.teamId,
+      ownerUserId: project.ownerUserId,
+      deletedAt: project.deletedAt,
+      archivedAt: project.archivedAt,
+      projectArchivedAt: project.archivedAt,
+    });
+
   const canOpenSelectedProjectBoard =
     selectedProjectSummary !== null && canViewProjectBoard(selectedProjectSummary);
+  const canOpenSelectedProjectBottlenecks =
+    selectedProjectSummary !== null && canViewProjectBottlenecks(selectedProjectSummary);
 
   const canOpenBoardByProjectId: Record<string, boolean> = {};
+  const canOpenBottlenecksByProjectId: Record<string, boolean> = {};
   for (const project of projects) {
     const targetProject =
       selectedProjectSummary !== null && selectedProjectSummary.id === project.id
         ? selectedProjectSummary
         : project;
     canOpenBoardByProjectId[project.id] = canViewProjectBoard(targetProject);
+    canOpenBottlenecksByProjectId[project.id] = canViewProjectBottlenecks(targetProject);
   }
 
   const canUnlinkTeam =
@@ -715,6 +738,8 @@ export function ProjectsPage() {
       canManageSelectedProjectMembers={canManageSelectedProjectMembers}
       canOpenSelectedProjectBoard={canOpenSelectedProjectBoard}
       canOpenBoardByProjectId={canOpenBoardByProjectId}
+      canOpenSelectedProjectBottlenecks={canOpenSelectedProjectBottlenecks}
+      canOpenBottlenecksByProjectId={canOpenBottlenecksByProjectId}
       feedback={feedback}
       onToggleIncludeArchived={setIncludeArchived}
       onSelectProject={setSelectedProjectId}

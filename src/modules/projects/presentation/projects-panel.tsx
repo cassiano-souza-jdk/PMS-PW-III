@@ -1,5 +1,6 @@
 import { zodResolver } from '@hookform/resolvers/zod';
 import {
+  IconAlertTriangle,
   IconArchive,
   IconArchiveOff,
   IconArrowsExchange,
@@ -126,6 +127,8 @@ export interface ProjectsPanelProps {
   readonly canManageSelectedProjectMembers: boolean;
   readonly canOpenSelectedProjectBoard: boolean;
   readonly canOpenBoardByProjectId: Readonly<Record<string, boolean>>;
+  readonly canOpenSelectedProjectBottlenecks?: boolean;
+  readonly canOpenBottlenecksByProjectId?: Readonly<Record<string, boolean>>;
   readonly feedback?: ProjectPanelFeedback | null;
   readonly onToggleIncludeArchived: (next: boolean) => void;
   readonly onSelectProject: (projectId: ProjectId) => void;
@@ -169,6 +172,7 @@ interface SelectedProjectDetailsViewProps {
   readonly canDeleteSelectedProject: boolean;
   readonly canManageSelectedProjectMembers: boolean;
   readonly canOpenSelectedProjectBoard: boolean;
+  readonly canOpenSelectedProjectBottlenecks: boolean;
   readonly isMutatingProject: boolean;
   readonly onOpenBoard: (projectId: ProjectId) => void;
   readonly onUpdateProject: (projectId: ProjectId, input: UpdateProjectInput) => Promise<void>;
@@ -210,6 +214,7 @@ function SelectedProjectDetailsView({
   canDeleteSelectedProject,
   canManageSelectedProjectMembers,
   canOpenSelectedProjectBoard,
+  canOpenSelectedProjectBottlenecks,
   isMutatingProject,
   onOpenBoard,
   onUpdateProject,
@@ -366,6 +371,15 @@ function SelectedProjectDetailsView({
                   </Link>
                 </Button>
               </>
+            ) : null}
+
+            {canOpenSelectedProjectBottlenecks ? (
+              <Button asChild variant="outline" className="min-h-[44px]">
+                <Link to={`/projects/${project.id}/bottlenecks`}>
+                  <IconAlertTriangle className="h-4 w-4" aria-hidden="true" />
+                  <span>{intl.formatMessage({ id: 'projects.openBottlenecksAction' })}</span>
+                </Link>
+              </Button>
             ) : null}
 
             <Button
@@ -713,6 +727,8 @@ export function ProjectsPanel({
   canManageSelectedProjectMembers,
   canOpenSelectedProjectBoard,
   canOpenBoardByProjectId,
+  canOpenSelectedProjectBottlenecks = false,
+  canOpenBottlenecksByProjectId = {},
   feedback = null,
   onToggleIncludeArchived,
   onSelectProject,
@@ -844,6 +860,8 @@ export function ProjectsPanel({
                 const isArchived =
                   project.archivedAt !== undefined || project.status === 'ARCHIVED';
                 const canOpenProjectBoard = canOpenBoardByProjectId[project.id] ?? false;
+                const canOpenProjectBottlenecks =
+                  canOpenBottlenecksByProjectId[project.id] ?? false;
 
                 return (
                   <li
@@ -899,16 +917,31 @@ export function ProjectsPanel({
                         </div>
                       </button>
 
-                      {canOpenProjectBoard ? (
-                        <Button
-                          type="button"
-                          variant="outline"
-                          className="min-h-[44px] w-full"
-                          onClick={() => onOpenBoard(project.id)}
-                        >
-                          <IconLayoutKanban className="h-4 w-4" aria-hidden="true" />
-                          <span>{intl.formatMessage({ id: 'projects.openBoardAction' })}</span>
-                        </Button>
+                      {canOpenProjectBoard || canOpenProjectBottlenecks ? (
+                        <div className="flex flex-wrap gap-2">
+                          {canOpenProjectBoard ? (
+                            <Button
+                              type="button"
+                              variant="outline"
+                              className="min-h-[44px] flex-1"
+                              onClick={() => onOpenBoard(project.id)}
+                            >
+                              <IconLayoutKanban className="h-4 w-4" aria-hidden="true" />
+                              <span>{intl.formatMessage({ id: 'projects.openBoardAction' })}</span>
+                            </Button>
+                          ) : null}
+
+                          {canOpenProjectBottlenecks ? (
+                            <Button asChild variant="outline" className="min-h-[44px] flex-1">
+                              <Link to={`/projects/${project.id}/bottlenecks`}>
+                                <IconAlertTriangle className="h-4 w-4" aria-hidden="true" />
+                                <span>
+                                  {intl.formatMessage({ id: 'projects.openBottlenecksAction' })}
+                                </span>
+                              </Link>
+                            </Button>
+                          ) : null}
+                        </div>
                       ) : null}
                     </div>
                   </li>
@@ -1092,6 +1125,7 @@ export function ProjectsPanel({
               canDeleteSelectedProject={canDeleteSelectedProject}
               canManageSelectedProjectMembers={canManageSelectedProjectMembers}
               canOpenSelectedProjectBoard={canOpenSelectedProjectBoard}
+              canOpenSelectedProjectBottlenecks={canOpenSelectedProjectBottlenecks}
               isMutatingProject={isMutatingProject}
               onOpenBoard={onOpenBoard}
               onUpdateProject={onUpdateProject}

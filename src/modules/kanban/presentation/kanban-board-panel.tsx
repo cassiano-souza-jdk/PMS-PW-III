@@ -16,7 +16,13 @@ import {
   sortableKeyboardCoordinates,
 } from '@dnd-kit/sortable';
 import { zodResolver } from '@hookform/resolvers/zod';
-import { IconArrowLeft, IconColumns3, IconListCheck, IconPlus } from '@tabler/icons-react';
+import {
+  IconAlertTriangle,
+  IconArrowLeft,
+  IconColumns3,
+  IconListCheck,
+  IconPlus,
+} from '@tabler/icons-react';
 import { useEffect, useRef, useState } from 'react';
 import { useForm } from 'react-hook-form';
 import { useIntl } from 'react-intl';
@@ -140,6 +146,7 @@ export interface KanbanPanelFeedback {
 
 export interface KanbanBoardPanelProps {
   readonly boardView: ProjectBoardView;
+  readonly canOpenBottlenecks?: boolean;
   readonly isLoading?: boolean;
   readonly feedback?: KanbanPanelFeedback | null;
   readonly onBackToProjects: () => void;
@@ -185,6 +192,7 @@ function isDependencyConflictError(error: unknown): boolean {
 
 export function KanbanBoardPanel({
   boardView,
+  canOpenBottlenecks = false,
   isLoading = false,
   feedback = null,
   onBackToProjects,
@@ -685,6 +693,15 @@ export function KanbanBoardPanel({
                 <span>{intl.formatMessage({ id: 'kanban.openTaskListAction' })}</span>
               </Link>
             </Button>
+
+            {canOpenBottlenecks ? (
+              <Button asChild variant="outline" className="min-h-[44px]">
+                <Link to={`/projects/${project.id}/bottlenecks`}>
+                  <IconAlertTriangle className="h-4 w-4" aria-hidden="true" />
+                  <span>{intl.formatMessage({ id: 'kanban.openBottlenecksAction' })}</span>
+                </Link>
+              </Button>
+            ) : null}
           </div>
           <h1
             id="kanban-board-heading"
