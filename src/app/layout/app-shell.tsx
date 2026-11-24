@@ -67,6 +67,23 @@ export function AppShell() {
   const { can } = usePermission();
 
   const canViewOrganizationSettings = isAuthenticated && can(PERMISSION_CODES.ORGANIZATION_VIEW);
+  const canViewFocus =
+    isAuthenticated &&
+    user !== null &&
+    activeOrganization !== null &&
+    can(PERMISSION_CODES.FOCUS_PREFERENCES_MANAGE, {
+      kind: 'FOCUS',
+      ownerUserId: user.id,
+    });
+  const canViewBottlenecks =
+    isAuthenticated &&
+    user !== null &&
+    activeOrganization !== null &&
+    (can(PERMISSION_CODES.BOTTLENECK_VIEW) ||
+      can(PERMISSION_CODES.ANALYTICS_PERSONAL_VIEW, {
+        kind: 'BOTTLENECK',
+        ownerUserId: user.id,
+      }));
 
   const handleOrganizationChange = (event: ChangeEvent<HTMLSelectElement>) => {
     const selected = organizations.find((org) => org.id === event.target.value);
@@ -174,6 +191,20 @@ export function AppShell() {
                       <li>
                         <NavLink to="/projects" className={navLinkClassName}>
                           {intl.formatMessage({ id: 'nav.projects' })}
+                        </NavLink>
+                      </li>
+                    ) : null}
+                    {canViewFocus ? (
+                      <li>
+                        <NavLink to="/focus" className={navLinkClassName}>
+                          {intl.formatMessage({ id: 'nav.focus' })}
+                        </NavLink>
+                      </li>
+                    ) : null}
+                    {canViewBottlenecks ? (
+                      <li>
+                        <NavLink to="/bottlenecks" className={navLinkClassName}>
+                          {intl.formatMessage({ id: 'nav.bottlenecks' })}
                         </NavLink>
                       </li>
                     ) : null}

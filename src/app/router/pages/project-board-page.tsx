@@ -269,6 +269,19 @@ export function ProjectBoardPage() {
     projectArchivedAt: boardView.project.archivedAt,
   };
 
+  const canOpenBottlenecks = can(PERMISSION_CODES.BOTTLENECK_VIEW, {
+    kind: 'BOTTLENECK',
+    id: asEntityId(boardView.project.id),
+    exists: true,
+    organizationId: boardView.project.organizationId,
+    projectId: boardView.project.id,
+    teamId: boardView.project.teamId,
+    ownerUserId: boardView.project.ownerUserId,
+    deletedAt: boardView.project.deletedAt,
+    archivedAt: boardView.project.archivedAt,
+    projectArchivedAt: boardView.project.archivedAt,
+  });
+
   const effectiveBoardView: ProjectBoardView = {
     ...boardView,
     permissions: {
@@ -479,6 +492,7 @@ export function ProjectBoardPage() {
   return (
     <KanbanBoardPanel
       boardView={effectiveBoardView}
+      canOpenBottlenecks={canOpenBottlenecks}
       feedback={feedback}
       onBackToProjects={handleBackToProjects}
       onMoveCard={handleMoveCard}
