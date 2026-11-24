@@ -127,8 +127,10 @@ export {
 } from './transactions';
 
 export {
+  DISALLOWED_ATTACHMENT_MIME_TYPES,
   MAX_ATTACHMENT_SIZE_BYTES,
   MAX_CONTEXT_ATTACHMENTS_SIZE_BYTES,
+  isDisallowedAttachmentMimeType,
   validateAttachmentQuota,
   type AttachmentBlobPayload,
   type AttachmentBlobStorePort,

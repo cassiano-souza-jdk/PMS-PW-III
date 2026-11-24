@@ -2,7 +2,13 @@ import { IconDownload, IconPaperclip, IconTrash, IconUpload } from '@tabler/icon
 import { useRef, useState, type ChangeEvent } from 'react';
 import { useIntl } from 'react-intl';
 import { APP_ERROR_CODES, isAppError } from '@/shared/errors';
-import { TASK_STATUSES, type AttachmentId, type TaskStatus, type UserId } from '@/shared/kernel';
+import {
+  TASK_STATUSES,
+  isDisallowedAttachmentMimeType,
+  type AttachmentId,
+  type TaskStatus,
+  type UserId,
+} from '@/shared/kernel';
 import {
   Alert,
   AlertDescription,
@@ -22,13 +28,6 @@ import {
   resolveUserDisplayName,
   type TaskUserOption,
 } from './task-ui-helpers';
-
-const DISALLOWED_EXECUTABLE_MIME_TYPES = new Set<string>([
-  'application/x-msdownload',
-  'application/x-dosexec',
-  'application/x-sh',
-  'application/x-executable',
-]);
 
 export interface TaskAttachmentsPanelProps {
   readonly attachments: readonly TaskAttachment[];
@@ -94,7 +93,8 @@ export function TaskAttachmentsPanel({
       return intl.formatMessage({ id: 'attachments.upload.emptyFileError' });
     }
     const normalizedMime = file.type.trim().toLowerCase();
-    if (normalizedMime.length === 0 || DISALLOWED_EXECUTABLE_MIME_TYPES.has(normalizedMime)) {
+    const baseMime = normalizedMime.split(';', 1)[0]?.trim() ?? '';
+    if (baseMime.length === 0 || isDisallowedAttachmentMimeType(normalizedMime)) {
       return intl.formatMessage({ id: 'attachments.upload.invalidTypeError' });
     }
     if (
