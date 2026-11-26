@@ -3,6 +3,7 @@ export {
   CONTEST_STATUSES,
   CYCLE_ORIGINS,
   FEEDBACK_CLOSURE_REASONS,
+  FEEDBACK_MODULE_KEYS,
   FEEDBACK_STATUSES,
   INITIAL_CONTEST_REASONS,
   INITIAL_FEEDBACK_CATEGORIES,
@@ -41,6 +42,7 @@ export {
   type FeedbackInternalNoteId,
   type FeedbackMessage,
   type FeedbackMessageId,
+  type FeedbackModuleKey,
   type FeedbackReopenRequest,
   type FeedbackReopenRequestId,
   type FeedbackSlaSnapshot,
@@ -86,3 +88,7 @@ export type {
   FeedbackRepositoryPort,
   FeedbackSlaSnapshotRepositoryPort,
 } from './application/ports/feedback-repository.port';
+export type {
+  FeedbackActorProfile,
+  FeedbackContextPort,
+} from './application/ports/feedback-context.port';

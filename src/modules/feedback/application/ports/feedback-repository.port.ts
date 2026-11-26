@@ -7,17 +7,20 @@ import type {
   UserId,
 } from '@/shared/kernel';
 import type {
+  ContestStatus,
   Feedback,
   FeedbackAttachment,
   FeedbackCategory,
   FeedbackCategoryId,
   FeedbackCategoryVersion,
+  FeedbackCategoryVersionId,
   FeedbackContest,
   FeedbackContestAnalysis,
   FeedbackContestDecision,
   FeedbackContestReason,
   FeedbackContestReasonId,
   FeedbackContestReasonVersion,
+  FeedbackContestReasonVersionId,
   FeedbackCycle,
   FeedbackInternalNote,
   FeedbackMessage,
@@ -25,6 +28,8 @@ import type {
   FeedbackReopenRequestId,
   FeedbackSlaSnapshot,
   FeedbackSlaSnapshotId,
+  FeedbackStatus,
+  ReopenRequestStatus,
 } from '../../domain/feedback';
 
 export interface FeedbackRepositoryPort {
@@ -34,6 +39,7 @@ export interface FeedbackRepositoryPort {
     filters?: {
       readonly authorUserId?: UserId;
       readonly assigneeId?: UserId;
+      readonly status?: FeedbackStatus;
     },
   ): Promise<readonly Feedback[]>;
   save(feedback: Feedback): Promise<void>;
@@ -53,6 +59,11 @@ export interface FeedbackCategoryRepositoryPort {
     organizationId: OrganizationId,
     categoryId: FeedbackCategoryId,
   ): Promise<FeedbackCategory | null>;
+  findByCode(organizationId: OrganizationId, code: string): Promise<FeedbackCategory | null>;
+  findVersionById(
+    organizationId: OrganizationId,
+    versionId: FeedbackCategoryVersionId,
+  ): Promise<FeedbackCategoryVersion | null>;
   listByOrganization(
     organizationId: OrganizationId,
     options?: { readonly includeInactive?: boolean; readonly includeDeleted?: boolean },
@@ -102,6 +113,14 @@ export interface FeedbackContestRepositoryPort {
     organizationId: OrganizationId,
     feedbackId: FeedbackId,
   ): Promise<readonly FeedbackContest[]>;
+  listByCycle(
+    organizationId: OrganizationId,
+    cycleId: FeedbackCycleId,
+  ): Promise<readonly FeedbackContest[]>;
+  listByOrganization(
+    organizationId: OrganizationId,
+    filters?: { readonly status?: ContestStatus },
+  ): Promise<readonly FeedbackContest[]>;
   listAnalyses(
     organizationId: OrganizationId,
     contestId: FeedbackContestId,
@@ -120,9 +139,14 @@ export interface FeedbackContestReasonRepositoryPort {
     organizationId: OrganizationId,
     reasonId: FeedbackContestReasonId,
   ): Promise<FeedbackContestReason | null>;
+  findByCode(organizationId: OrganizationId, code: string): Promise<FeedbackContestReason | null>;
+  findVersionById(
+    organizationId: OrganizationId,
+    versionId: FeedbackContestReasonVersionId,
+  ): Promise<FeedbackContestReasonVersion | null>;
   listByOrganization(
     organizationId: OrganizationId,
-    options?: { readonly includeInactive?: boolean },
+    options?: { readonly includeInactive?: boolean; readonly includeDeleted?: boolean },
   ): Promise<readonly FeedbackContestReason[]>;
   listVersions(
     organizationId: OrganizationId,
@@ -136,6 +160,10 @@ export interface FeedbackSlaSnapshotRepositoryPort {
   findById(
     organizationId: OrganizationId,
     snapshotId: FeedbackSlaSnapshotId,
+  ): Promise<FeedbackSlaSnapshot | null>;
+  findByCycleId(
+    organizationId: OrganizationId,
+    cycleId: FeedbackCycleId,
   ): Promise<FeedbackSlaSnapshot | null>;
   listByFeedback(
     organizationId: OrganizationId,
@@ -152,6 +180,10 @@ export interface FeedbackReopenRequestRepositoryPort {
   listByFeedback(
     organizationId: OrganizationId,
     feedbackId: FeedbackId,
+  ): Promise<readonly FeedbackReopenRequest[]>;
+  listByOrganization(
+    organizationId: OrganizationId,
+    filters?: { readonly status?: ReopenRequestStatus },
   ): Promise<readonly FeedbackReopenRequest[]>;
   save(request: FeedbackReopenRequest): Promise<void>;
 }
