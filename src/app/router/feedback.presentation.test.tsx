@@ -6,7 +6,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { axe } from 'vitest-axe';
 import { App } from '@/app/App';
 import {
+  DEMO_ADMIN_USER_ID,
   DEMO_FEEDBACK_IDS,
+  DEMO_MANAGER_USER_ID,
+  DEMO_MEMBER_USER_ID,
+  DEMO_ORG_ID,
   createAppContainer,
   type AppCompositionContainer,
 } from '@/app/composition';
@@ -263,9 +267,17 @@ describe('Feedbacks, SLA, Contestation & Governance Presentation + Routing + ABA
         level: 1,
         name: ptBRMessages['feedbacks.queue.title'],
       });
+      // Bug #4: MEMBER com feedbacks acessíveis visualiza controles de exportação na fila /feedback
+      expect(
+        await screen.findByRole('heading', {
+          level: 2,
+          name: ptBRMessages['feedbacks.export.title'],
+        }),
+      ).toBeInTheDocument();
       expect(
         screen.queryByRole('link', { name: ptBRMessages['feedbacks.nav.governanceShortcut'] }),
       ).not.toBeInTheDocument();
+      expect(await axe(container)).toHaveNoViolations();
 
       // Detalhe como MEMBER (autor do feedback): notas internas estritamente segregadas (DN-04)
       await router.navigate(`/feedback/${DEMO_FEEDBACK_IDS.IN_PROGRESS_BUG}`);
@@ -290,6 +302,85 @@ describe('Feedbacks, SLA, Contestation & Governance Presentation + Routing + ABA
         name: ptBRMessages['feedback.unauthorizedTitle'],
       });
       expect(unauthorizedHeading).toHaveAttribute('tabindex', '-1');
+      expect(await axe(container)).toHaveNoViolations();
+    },
+  );
+
+  it(
+    'mantém hierarquia WCAG heading-order (h2 -> h3) em FeedbackContestationPanel quando canConfirmResolution e canOpenContest são false',
+    { timeout: 30_000 },
+    async () => {
+      const user = userEvent.setup();
+      const { appContainer, container, router } = await renderIsolatedApp('/demo');
+
+      await screen.findByRole(
+        'heading',
+        { level: 1, name: ptBRMessages['auth.demo.title'] },
+        { timeout: 5000 },
+      );
+      await user.click(screen.getByRole('button', { name: 'Entrar como Administrador' }));
+      await screen.findByRole('heading', {
+        level: 1,
+        name: ptBRMessages['organizations.title'],
+      });
+
+      const reasons = await appContainer.services.feedback.listFeedbackContestReasons(
+        DEMO_ADMIN_USER_ID,
+        DEMO_ORG_ID,
+      );
+      const activeReason = reasons[0];
+      expect(activeReason).toBeDefined();
+
+      const contest = await appContainer.services.feedback.openFeedbackContest(
+        DEMO_MEMBER_USER_ID,
+        DEMO_ORG_ID,
+        DEMO_FEEDBACK_IDS.RESOLVED_IMPROVEMENT,
+        {
+          reasonId: activeReason!.reason.id,
+          justification: 'Problema ainda ocorre no fluxo de atalho.',
+        },
+      );
+      await appContainer.services.feedback.delegateFeedbackContestAnalysis(
+        DEMO_ADMIN_USER_ID,
+        DEMO_ORG_ID,
+        DEMO_FEEDBACK_IDS.RESOLVED_IMPROVEMENT,
+        contest.id,
+        { analystUserId: DEMO_MANAGER_USER_ID },
+      );
+      await appContainer.services.feedback.submitFeedbackContestAnalysis(
+        DEMO_MANAGER_USER_ID,
+        DEMO_ORG_ID,
+        DEMO_FEEDBACK_IDS.RESOLVED_IMPROVEMENT,
+        contest.id,
+        {
+          recommendation: 'KEEP_RESOLUTION',
+          summary: 'Parecer tecnico preliminar registrado.',
+        },
+      );
+
+      await router.navigate(`/feedback/${DEMO_FEEDBACK_IDS.RESOLVED_IMPROVEMENT}`);
+      await screen.findByRole('heading', {
+        level: 2,
+        name: ptBRMessages['feedbacks.contests.title'],
+      });
+      expect(
+        screen.getAllByRole('heading', {
+          level: 3,
+          name: ptBRMessages['feedbacks.contests.analysisTitle'],
+        }).length,
+      ).toBeGreaterThanOrEqual(1);
+      expect(
+        screen.getByRole('heading', {
+          level: 3,
+          name: ptBRMessages['feedbacks.contests.delegateTitle'],
+        }),
+      ).toBeInTheDocument();
+      expect(
+        screen.getByRole('heading', {
+          level: 3,
+          name: ptBRMessages['feedbacks.contests.decisionTitle'],
+        }),
+      ).toBeInTheDocument();
       expect(await axe(container)).toHaveNoViolations();
     },
   );

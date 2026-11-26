@@ -144,6 +144,7 @@ import type {
 } from '../ports/feedback-repository.port';
 
 const SLA_WARNING_THRESHOLD_RATIO = 0.8;
+const DELEGATED_CONTEST_VIEW_GRANT_REASON_PREFIX = 'Delegated contest analysis view for feedback "';
 
 const prioritySchema = z.enum([
   PRIORITIES.LOW,
@@ -895,6 +896,31 @@ function isAuthorBlockedFromInternalNotes(feedback: Feedback, actor: Authorizati
   return feedback.authorUserId === actor.userId && role !== ORGANIZATION_ROLES.ADMIN;
 }
 
+function hasExplicitStatusManageGrant(
+  actor: AuthorizationActor,
+  feedbackId: FeedbackId,
+  now: IsoDateTime,
+): boolean {
+  const grants = actor.grants;
+  if (!grants || grants.length === 0) {
+    return false;
+  }
+
+  const targetScopeId = asEntityId(feedbackId);
+  const nowMs = parseIsoDateTimeMs(now);
+
+  return grants.some(
+    (grant) =>
+      grant.permission === PERMISSION_CODES.FEEDBACK_STATUS_MANAGE &&
+      grant.status === GRANT_STATUSES.ACTIVE &&
+      grant.revokedAt === undefined &&
+      (grant.startsAt === undefined || parseIsoDateTimeMs(grant.startsAt) <= nowMs) &&
+      (grant.expiresAt === undefined || parseIsoDateTimeMs(grant.expiresAt) > nowMs) &&
+      (grant.scopeType === PERMISSION_SCOPE_TYPES.ORGANIZATION ||
+        (grant.scopeType === PERMISSION_SCOPE_TYPES.RESOURCE && grant.scopeId === targetScopeId)),
+  );
+}
+
 function createEmptyCountsByStatus(): Record<FeedbackStatus, number> {
   return {
     [FEEDBACK_STATUSES.RECEIVED]: 0,
@@ -1181,7 +1207,7 @@ export class FeedbackService {
     return { role: membership.role };
   }
 
-  private async revokeContestAnalyzeGrantsForFeedback(
+  private async revokeDelegatedContestGrantsForFeedback(
     organizationId: OrganizationId,
     feedbackId: FeedbackId,
     revokedByUserId: UserId,
@@ -1190,11 +1216,13 @@ export class FeedbackService {
     const orgGrants = await this.deps.permissionGrants.listByOrganization(organizationId);
     const matching = orgGrants.filter(
       (grant) =>
-        grant.permission === PERMISSION_CODES.FEEDBACK_CONTEST_ANALYZE &&
         grant.scopeType === PERMISSION_SCOPE_TYPES.RESOURCE &&
         (grant.scopeId as string | undefined) === (feedbackId as string) &&
         grant.revokedAt === undefined &&
-        grant.status !== GRANT_STATUSES.REVOKED,
+        grant.status !== GRANT_STATUSES.REVOKED &&
+        (grant.permission === PERMISSION_CODES.FEEDBACK_CONTEST_ANALYZE ||
+          (grant.permission === PERMISSION_CODES.FEEDBACK_VIEW &&
+            grant.reason.startsWith(DELEGATED_CONTEST_VIEW_GRANT_REASON_PREFIX))),
     );
 
     for (const grant of matching) {
@@ -1662,7 +1690,7 @@ export class FeedbackService {
         !isClosed &&
         statusManageDecision.allowed &&
         (actor.organizationMembership?.role === ORGANIZATION_ROLES.ADMIN ||
-          statusManageDecision.matchedGrantId !== undefined),
+          hasExplicitStatusManageGrant(actor, validatedFeedbackId, now)),
       canSendMessage:
         !isClosed &&
         evaluateAuthorization({
@@ -2177,13 +2205,12 @@ export class FeedbackService {
     };
 
     assertAuthorized(request);
-    const decision = evaluateAuthorization(request);
 
     // DN-03: Changing priority/category is restricted to ADMIN by default,
     // or an explicit active PermissionGrant for FEEDBACK_STATUS_MANAGE.
     if (
       actor.organizationMembership?.role !== ORGANIZATION_ROLES.ADMIN &&
-      decision.matchedGrantId === undefined
+      !hasExplicitStatusManageGrant(actor, validatedFeedbackId, now)
     ) {
       throw new AuthorizationError(
         'Updating feedback priority or category is restricted to organization ADMINs or an explicit FEEDBACK_STATUS_MANAGE grant (DN-03).',
@@ -4779,7 +4806,11 @@ export class FeedbackService {
       throw new ConflictError('Cannot delegate analysis for an already decided or closed contest.');
     }
 
-    await this.assertTargetHandlerEligible(validatedOrgId, targetAnalystId, feedback);
+    const { role: targetAnalystRole } = await this.assertTargetHandlerEligible(
+      validatedOrgId,
+      targetAnalystId,
+      feedback,
+    );
 
     const updatedContest: FeedbackContest = Object.freeze({
       ...contest,
@@ -4804,6 +4835,23 @@ export class FeedbackService {
       status: GRANT_STATUSES.ACTIVE,
     });
 
+    const pairedViewGrant: PermissionGrant | undefined =
+      targetAnalystRole !== ORGANIZATION_ROLES.ADMIN && feedback.assigneeId !== targetAnalystId
+        ? Object.freeze({
+            id: asGrantId(this.nextUuid()),
+            organizationId: validatedOrgId,
+            granteeUserId: targetAnalystId,
+            permission: PERMISSION_CODES.FEEDBACK_VIEW,
+            scopeType: PERMISSION_SCOPE_TYPES.RESOURCE,
+            scopeId: asEntityId(validatedFeedbackId),
+            grantedByUserId: validatedActorId,
+            grantedByRole: actor.organizationMembership!.role,
+            grantedAt: now,
+            reason: `${DELEGATED_CONTEST_VIEW_GRANT_REASON_PREFIX}${validatedFeedbackId}" for contest "${validatedContestId}".`,
+            status: GRANT_STATUSES.ACTIVE,
+          })
+        : undefined;
+
     await this.deps.transactionPort.run(
       [
         TRANSACTION_RESOURCES.FEEDBACK_CONTESTS,
@@ -4811,13 +4859,16 @@ export class FeedbackService {
         TRANSACTION_RESOURCES.AUDIT_EVENTS,
       ],
       async () => {
-        await this.revokeContestAnalyzeGrantsForFeedback(
+        await this.revokeDelegatedContestGrantsForFeedback(
           validatedOrgId,
           validatedFeedbackId,
           validatedActorId,
           now,
         );
         await this.deps.permissionGrants.save(newGrant);
+        if (pairedViewGrant !== undefined) {
+          await this.deps.permissionGrants.save(pairedViewGrant);
+        }
         await this.deps.feedbackContests.saveContest(updatedContest);
 
         await this.deps.auditEvents.append({
@@ -5159,7 +5210,7 @@ export class FeedbackService {
       async () => {
         await this.deps.feedbackContests.appendDecision(decision);
         await this.deps.feedbackContests.saveContest(updatedContest);
-        await this.revokeContestAnalyzeGrantsForFeedback(
+        await this.revokeDelegatedContestGrantsForFeedback(
           validatedOrgId,
           validatedFeedbackId,
           validatedActorId,

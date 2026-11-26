@@ -886,4 +886,199 @@ describe('Phase 09 — FeedbackService, Anti-Cycle Adapter, Dexie Complements & 
     expect(auditPage.items.some((evt) => evt.category === AUDIT_CATEGORIES.EXPORT)).toBe(true);
     expect(emittedEvents.some((evt) => evt.eventType === 'feedback.exported')).toBe(true);
   });
+
+  it('F09-T08: allows assigned MANAGER with explicit FEEDBACK_STATUS_MANAGE grant (DN-03), blocks under ExplicitDenyRule, and syncs paired FEEDBACK_VIEW grant on contest delegation', async () => {
+    await seedAdditionalMembers();
+    const securityCategoryId = await getActiveCategoryId('SECURITY');
+    const usabilityCategoryId = await getActiveCategoryId('USABILITY');
+    const reasonId = await getActiveReasonId('PROBLEM_PERSISTS');
+
+    const feedback = await container.httpClient.post<Feedback>(
+      `/organizations/${DEMO_ORG_ID}/feedbacks`,
+      {
+        moduleKey: 'kanban',
+        categoryId: securityCategoryId,
+        title: 'Regressao F09-T08 triagem DN-03 e delegacao contestacao',
+        description:
+          'Validar grant explicito para MANAGER atribuido e grant pareado de visualizacao.',
+        priority: PRIORITIES.HIGH,
+      },
+      { actorUserId: DEMO_MEMBER_USER_ID },
+    );
+
+    await container.httpClient.post<Feedback>(
+      `/organizations/${DEMO_ORG_ID}/feedbacks/${feedback.id}/assign`,
+      { assigneeId: DEMO_MANAGER_USER_ID },
+      { actorUserId: DEMO_ADMIN_USER_ID },
+    );
+
+    // Assigned MANAGER without explicit grant -> canUpdateTriage is false
+    const detailWithoutGrant = await container.httpClient.get<FeedbackDetail>(
+      `/organizations/${DEMO_ORG_ID}/feedbacks/${feedback.id}`,
+      { actorUserId: DEMO_MANAGER_USER_ID },
+    );
+    expect(detailWithoutGrant.capabilities.canManageStatus).toBe(true);
+    expect(detailWithoutGrant.capabilities.canUpdateTriage).toBe(false);
+
+    // Grant explicit FEEDBACK_STATUS_MANAGE to already-assigned MANAGER
+    await container.services.authorization.grantPermission(DEMO_ADMIN_USER_ID, DEMO_ORG_ID, {
+      granteeUserId: DEMO_MANAGER_USER_ID,
+      permission: PERMISSION_CODES.FEEDBACK_STATUS_MANAGE,
+      scopeType: PERMISSION_SCOPE_TYPES.RESOURCE,
+      scopeId: asEntityId(feedback.id),
+      reason: 'Explicit triage grant for assigned manager (DN-03)',
+    });
+
+    const detailWithGrant = await container.httpClient.get<FeedbackDetail>(
+      `/organizations/${DEMO_ORG_ID}/feedbacks/${feedback.id}`,
+      { actorUserId: DEMO_MANAGER_USER_ID },
+    );
+    expect(detailWithGrant.capabilities.canUpdateTriage).toBe(true);
+
+    const triagedByManager = await container.httpClient.patch<Feedback>(
+      `/organizations/${DEMO_ORG_ID}/feedbacks/${feedback.id}/triage`,
+      { priority: PRIORITIES.CRITICAL, categoryId: usabilityCategoryId },
+      { actorUserId: DEMO_MANAGER_USER_ID },
+    );
+    expect(triagedByManager.priority).toBe(PRIORITIES.CRITICAL);
+    expect(triagedByManager.categoryId).toBe(usabilityCategoryId);
+
+    // ExplicitDenyRule overrides explicit grant on both capability and mutation
+    const denyRule = await container.services.authorization.createExplicitDenyRule(
+      DEMO_ADMIN_USER_ID,
+      DEMO_ORG_ID,
+      {
+        targetUserId: DEMO_MANAGER_USER_ID,
+        permission: PERMISSION_CODES.FEEDBACK_STATUS_MANAGE,
+        scopeType: PERMISSION_SCOPE_TYPES.RESOURCE,
+        scopeId: asEntityId(feedback.id),
+        reason: 'Deny overrides explicit triage grant',
+      },
+    );
+
+    const detailWithDeny = await container.httpClient.get<FeedbackDetail>(
+      `/organizations/${DEMO_ORG_ID}/feedbacks/${feedback.id}`,
+      { actorUserId: DEMO_MANAGER_USER_ID },
+    );
+    expect(detailWithDeny.capabilities.canManageStatus).toBe(false);
+    expect(detailWithDeny.capabilities.canUpdateTriage).toBe(false);
+
+    await expect(
+      container.httpClient.patch<Feedback>(
+        `/organizations/${DEMO_ORG_ID}/feedbacks/${feedback.id}/triage`,
+        { priority: PRIORITIES.LOW },
+        { actorUserId: DEMO_MANAGER_USER_ID },
+      ),
+    ).rejects.toThrow(AuthorizationError);
+
+    await container.services.authorization.revokeExplicitDenyRule(
+      DEMO_ADMIN_USER_ID,
+      DEMO_ORG_ID,
+      denyRule.id,
+    );
+
+    // Resolve and open contest
+    await container.httpClient.patch<Feedback>(
+      `/organizations/${DEMO_ORG_ID}/feedbacks/${feedback.id}/status`,
+      {
+        targetStatus: FEEDBACK_STATUSES.RESOLVED,
+        resolutionDescription: 'Entrega inicial concluida.',
+      },
+      { actorUserId: DEMO_MANAGER_USER_ID },
+    );
+
+    const contest = await container.httpClient.post<FeedbackContest>(
+      `/organizations/${DEMO_ORG_ID}/feedbacks/${feedback.id}/contests`,
+      {
+        reasonId,
+        justification: 'Ainda reproduz em ambiente de homologacao.',
+      },
+      { actorUserId: DEMO_MEMBER_USER_ID },
+    );
+
+    // Manual FEEDBACK_VIEW grant must remain intact after delegation & decision revocations
+    const manualViewGrant = await container.services.authorization.grantPermission(
+      DEMO_ADMIN_USER_ID,
+      DEMO_ORG_ID,
+      {
+        granteeUserId: SECOND_MANAGER_ID,
+        permission: PERMISSION_CODES.FEEDBACK_VIEW,
+        scopeType: PERMISSION_SCOPE_TYPES.RESOURCE,
+        scopeId: asEntityId(feedback.id),
+        reason: 'Manual audit review access',
+      },
+    );
+
+    // Delegate to SECOND_MANAGER_ID (non-ADMIN and not assigneeId) -> paired FEEDBACK_VIEW grant created
+    await container.httpClient.post<FeedbackContest>(
+      `/organizations/${DEMO_ORG_ID}/feedbacks/${feedback.id}/contests/${contest.id}/delegate`,
+      { analystUserId: SECOND_MANAGER_ID },
+      { actorUserId: DEMO_ADMIN_USER_ID },
+    );
+
+    const secondManagerActiveGrants =
+      await container.repositories.authorization.permissionGrants.listActiveByGrantee(
+        DEMO_ORG_ID,
+        SECOND_MANAGER_ID,
+        currentNow,
+      );
+    expect(
+      secondManagerActiveGrants.some(
+        (g) =>
+          g.permission === PERMISSION_CODES.FEEDBACK_CONTEST_ANALYZE &&
+          g.scopeType === PERMISSION_SCOPE_TYPES.RESOURCE &&
+          g.scopeId === asEntityId(feedback.id),
+      ),
+    ).toBe(true);
+    expect(
+      secondManagerActiveGrants.some(
+        (g) =>
+          g.permission === PERMISSION_CODES.FEEDBACK_VIEW &&
+          g.scopeType === PERMISSION_SCOPE_TYPES.RESOURCE &&
+          g.scopeId === asEntityId(feedback.id) &&
+          g.reason.startsWith('Delegated contest analysis view for feedback "'),
+      ),
+    ).toBe(true);
+    expect(
+      secondManagerActiveGrants.some(
+        (g) => g.permission === PERMISSION_CODES.FEEDBACK_INTERNAL_NOTE_VIEW,
+      ),
+    ).toBe(false);
+
+    // SECOND_MANAGER_ID can inspect feedback detail without internal notes
+    const delegatedDetail = await container.httpClient.get<FeedbackDetail>(
+      `/organizations/${DEMO_ORG_ID}/feedbacks/${feedback.id}`,
+      { actorUserId: SECOND_MANAGER_ID },
+    );
+    expect(delegatedDetail.canViewInternalNotes).toBe(false);
+    expect(delegatedDetail.internalNotes).toEqual([]);
+
+    // Decide contest -> revokes analyze + delegated view grants, preserves manual view grant
+    await container.httpClient.post<DecideContestResult>(
+      `/organizations/${DEMO_ORG_ID}/feedbacks/${feedback.id}/contests/${contest.id}/decision`,
+      {
+        outcome: CONTEST_RECOMMENDATIONS.KEEP_RESOLUTION,
+        justification: 'Validado em conjunto.',
+      },
+      { actorUserId: DEMO_ADMIN_USER_ID },
+    );
+
+    const secondManagerGrantsAfterDecision =
+      await container.repositories.authorization.permissionGrants.listByGrantee(
+        DEMO_ORG_ID,
+        SECOND_MANAGER_ID,
+      );
+    const delegatedViewAfterDecision = secondManagerGrantsAfterDecision.find((g) =>
+      g.reason.startsWith('Delegated contest analysis view for feedback "'),
+    );
+    expect(delegatedViewAfterDecision?.status).toBe(GRANT_STATUSES.REVOKED);
+    const analyzeAfterDecision = secondManagerGrantsAfterDecision.find(
+      (g) => g.permission === PERMISSION_CODES.FEEDBACK_CONTEST_ANALYZE,
+    );
+    expect(analyzeAfterDecision?.status).toBe(GRANT_STATUSES.REVOKED);
+    const manualAfterDecision = secondManagerGrantsAfterDecision.find(
+      (g) => g.id === manualViewGrant.id,
+    );
+    expect(manualAfterDecision?.status).toBe(GRANT_STATUSES.ACTIVE);
+  });
 });

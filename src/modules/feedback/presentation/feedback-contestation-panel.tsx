@@ -359,9 +359,9 @@ export function FeedbackContestationPanel({
 
                     {analyses.length > 0 ? (
                       <div className="space-y-2 border-t pt-3">
-                        <h4 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                        <h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
                           {intl.formatMessage({ id: 'feedbacks.contests.analysisTitle' })}
-                        </h4>
+                        </h3>
                         {analyses.map((analysis) => (
                           <div
                             key={analysis.id}
@@ -392,9 +392,9 @@ export function FeedbackContestationPanel({
 
                     {decisions.length > 0 ? (
                       <div className="space-y-2 border-t pt-3">
-                        <h4 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                        <h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
                           {intl.formatMessage({ id: 'feedbacks.contests.decisionTitle' })}
-                        </h4>
+                        </h3>
                         {decisions.map((decision) => (
                           <div
                             key={decision.id}
@@ -448,9 +448,9 @@ export function FeedbackContestationPanel({
                         }}
                         className="space-y-2 border-t pt-3"
                       >
-                        <h4 className="text-sm font-semibold text-foreground">
+                        <h3 className="text-sm font-semibold text-foreground">
                           {intl.formatMessage({ id: 'feedbacks.contests.delegateTitle' })}
-                        </h4>
+                        </h3>
                         <div className="grid gap-3 sm:grid-cols-2">
                           <div className="space-y-1">
                             <Label htmlFor={`delegate-analyst-${contest.id}`}>
@@ -524,9 +524,9 @@ export function FeedbackContestationPanel({
                         }}
                         className="space-y-2 border-t pt-3"
                       >
-                        <h4 className="text-sm font-semibold text-foreground">
+                        <h3 className="text-sm font-semibold text-foreground">
                           {intl.formatMessage({ id: 'feedbacks.contests.analysisTitle' })}
-                        </h4>
+                        </h3>
                         <div className="space-y-1">
                           <Label htmlFor={`analysis-rec-${contest.id}`}>
                             {intl.formatMessage({ id: 'feedbacks.contests.recommendationLabel' })}
@@ -613,9 +613,9 @@ export function FeedbackContestationPanel({
                         className="space-y-2 border-t pt-3"
                         noValidate
                       >
-                        <h4 className="text-sm font-semibold text-foreground">
+                        <h3 className="text-sm font-semibold text-foreground">
                           {intl.formatMessage({ id: 'feedbacks.contests.decisionTitle' })}
-                        </h4>
+                        </h3>
                         <p className="text-xs text-muted-foreground">
                           {intl.formatMessage({
                             id: 'feedbacks.contests.decisionDivergenceNotice',
@@ -797,9 +797,9 @@ export function FeedbackContestationPanel({
                         }}
                         className="space-y-2 border-t pt-3"
                       >
-                        <h4 className="text-sm font-semibold text-foreground">
+                        <h3 className="text-sm font-semibold text-foreground">
                           {intl.formatMessage({ id: 'feedbacks.reopen.decisionTitle' })}
-                        </h4>
+                        </h3>
                         <div className="grid gap-3 sm:grid-cols-3">
                           <div className="space-y-1">
                             <Label htmlFor={`reopen-decision-${req.id}`}>
