@@ -146,6 +146,19 @@ export class DexieFeedbackCycleRepository implements FeedbackCycleRepositoryPort
     return findOrganizationScopedById(this.table, organizationId, cycleId, 'FeedbackCycle');
   }
 
+  async listByOrganization(organizationId: OrganizationId): Promise<readonly FeedbackCycle[]> {
+    return withPersistenceErrorHandling('FeedbackCycle.listByOrganization', async () => {
+      const records = await this.table.where('organizationId').equals(organizationId).toArray();
+
+      return records.sort(
+        (a, b) =>
+          parseIsoDateTimeMs(a.startedAt) - parseIsoDateTimeMs(b.startedAt) ||
+          a.cycleNumber - b.cycleNumber ||
+          a.id.localeCompare(b.id),
+      );
+    });
+  }
+
   async listByFeedback(
     organizationId: OrganizationId,
     feedbackId: FeedbackId,
@@ -732,6 +745,20 @@ export class DexieFeedbackSlaSnapshotRepository implements FeedbackSlaSnapshotRe
         .equals([organizationId, cycleId])
         .first();
       return record ?? null;
+    });
+  }
+
+  async listByOrganization(
+    organizationId: OrganizationId,
+  ): Promise<readonly FeedbackSlaSnapshot[]> {
+    return withPersistenceErrorHandling('FeedbackSlaSnapshot.listByOrganization', async () => {
+      const records = await this.table.where('organizationId').equals(organizationId).toArray();
+
+      return records.sort(
+        (a, b) =>
+          parseIsoDateTimeMs(a.capturedAt) - parseIsoDateTimeMs(b.capturedAt) ||
+          a.id.localeCompare(b.id),
+      );
     });
   }
 

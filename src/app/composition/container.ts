@@ -11,6 +11,7 @@ import {
 import { AuthorizationManagementService } from '@/modules/authorization';
 import { BottleneckService } from '@/modules/bottlenecks';
 import { DependencyService } from '@/modules/dependencies';
+import { FeedbackService } from '@/modules/feedback';
 import { FocusService } from '@/modules/focus';
 import { ImpedimentService } from '@/modules/impediments';
 import { InvitationService } from '@/modules/invitations';
@@ -49,6 +50,7 @@ import {
   createAuthorizationContextLookupAdapter,
 } from './authorization-ports-adapter';
 import { ensureDemoOrganizationSeeded, type DemoOrganizationSeedResult } from './demo-seed';
+import { createFeedbackContextAdapter } from './feedback-ports-adapter';
 import {
   createProjectBoardInitializerAdapter,
   createProjectTeamLookupAdapter,
@@ -77,6 +79,7 @@ export interface AppServicesRegistry {
   readonly impediments: ImpedimentService;
   readonly focus: FocusService;
   readonly bottlenecks: BottleneckService;
+  readonly feedback: FeedbackService;
   readonly authorization: AuthorizationManagementService;
 }
 
@@ -352,6 +355,31 @@ export function createAppContainer(
       bottlenecks: new BottleneckService({
         bottleneckAlerts: resolvedRepositories.bottlenecks.bottleneckAlerts,
         workContext: createBottleneckWorkContextAdapter(resolvedRepositories),
+        organizations: resolvedRepositories.organizations.organizations,
+        organizationMembers: resolvedRepositories.organizations.organizationMembers,
+        organizationSettings: resolvedRepositories.settings.organizationSettings,
+        permissionGrants: resolvedRepositories.authorization.permissionGrants,
+        explicitDenyRules: resolvedRepositories.authorization.explicitDenyRules,
+        auditEvents: resolvedRepositories.audit.auditEvents,
+        transactionPort: resolvedTransactionPort,
+        eventBus: resolvedEventBus,
+        logger: resolvedLogger,
+        ...(options.now !== undefined ? { now: options.now } : {}),
+        ...(options.generateUuid !== undefined ? { generateUuid: options.generateUuid } : {}),
+      }),
+      feedback: new FeedbackService({
+        feedbacks: resolvedRepositories.feedback.feedbacks,
+        feedbackCycles: resolvedRepositories.feedback.feedbackCycles,
+        feedbackCategories: resolvedRepositories.feedback.feedbackCategories,
+        feedbackMessages: resolvedRepositories.feedback.feedbackMessages,
+        feedbackInternalNotes: resolvedRepositories.feedback.feedbackInternalNotes,
+        feedbackAttachments: resolvedRepositories.feedback.feedbackAttachments,
+        feedbackContests: resolvedRepositories.feedback.feedbackContests,
+        feedbackContestReasons: resolvedRepositories.feedback.feedbackContestReasons,
+        feedbackSlaSnapshots: resolvedRepositories.feedback.feedbackSlaSnapshots,
+        feedbackReopenRequests: resolvedRepositories.feedback.feedbackReopenRequests,
+        attachmentBlobStore: resolvedAttachmentBlobStore,
+        feedbackContext: createFeedbackContextAdapter(resolvedRepositories),
         organizations: resolvedRepositories.organizations.organizations,
         organizationMembers: resolvedRepositories.organizations.organizationMembers,
         organizationSettings: resolvedRepositories.settings.organizationSettings,

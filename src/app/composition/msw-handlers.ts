@@ -30,6 +30,33 @@ import {
   asTaskDependencyId,
   type AddTaskDependencyInput,
 } from '@/modules/dependencies';
+import {
+  FeedbackService,
+  asFeedbackCategoryId,
+  asFeedbackContestReasonId,
+  asFeedbackInternalNoteId,
+  asFeedbackMessageId,
+  asFeedbackReopenRequestId,
+  type AddFeedbackInternalNoteInput,
+  type AddFeedbackMessageInput,
+  type AssignFeedbackInput,
+  type CreateCatalogItemInput,
+  type CreateFeedbackInput,
+  type DecideContestInput,
+  type DecideExceptionalReopenInput,
+  type DelegateContestAnalysisInput,
+  type FeedbackExportFormat,
+  type FeedbackStatus,
+  type OpenFeedbackContestInput,
+  type ReorderFeedbackCategoriesInput,
+  type ReorderFeedbackContestReasonsInput,
+  type RequestExceptionalReopenInput,
+  type SubmitContestAnalysisInput,
+  type TransitionFeedbackStatusInput,
+  type UpdateCatalogItemInput,
+  type UpdateFeedbackSlaSettingsInput,
+  type UpdateFeedbackTriageInput,
+} from '@/modules/feedback';
 import { FocusService, type UpdateFocusPreferencesInput } from '@/modules/focus';
 import {
   ImpedimentService,
@@ -101,6 +128,8 @@ import {
   asAttachmentId,
   asBoardColumnId,
   asCorrelationId,
+  asFeedbackContestId,
+  asFeedbackId,
   asGrantId,
   asImpedimentId,
   asIsoDateTime,
@@ -121,6 +150,7 @@ import {
   type IsoDateTime,
   type OrganizationId,
   type OrganizationRole,
+  type Priority,
   type SubtaskId,
   type TransactionPort,
   type UserId,
@@ -136,6 +166,7 @@ import {
   ensureDemoOrganizationSeeded,
   type DemoOrganizationSeedResult,
 } from './demo-seed';
+import { createFeedbackContextAdapter } from './feedback-ports-adapter';
 import {
   createProjectBoardInitializerAdapter,
   createProjectTeamLookupAdapter,
@@ -600,6 +631,30 @@ function resolveMswServices(deps: MswCompositionDependencies): AppServicesRegist
     bottlenecks: new BottleneckService({
       bottleneckAlerts: deps.repositories.bottlenecks.bottleneckAlerts,
       workContext: createBottleneckWorkContextAdapter(deps.repositories),
+      organizations: deps.repositories.organizations.organizations,
+      organizationMembers: deps.repositories.organizations.organizationMembers,
+      organizationSettings: deps.repositories.settings.organizationSettings,
+      permissionGrants: deps.repositories.authorization.permissionGrants,
+      explicitDenyRules: deps.repositories.authorization.explicitDenyRules,
+      auditEvents: deps.repositories.audit.auditEvents,
+      transactionPort: deps.transactionPort,
+      eventBus: deps.eventBus,
+      ...(deps.now !== undefined ? { now: deps.now } : {}),
+      ...(deps.generateUuid !== undefined ? { generateUuid: deps.generateUuid } : {}),
+    }),
+    feedback: new FeedbackService({
+      feedbacks: deps.repositories.feedback.feedbacks,
+      feedbackCycles: deps.repositories.feedback.feedbackCycles,
+      feedbackCategories: deps.repositories.feedback.feedbackCategories,
+      feedbackMessages: deps.repositories.feedback.feedbackMessages,
+      feedbackInternalNotes: deps.repositories.feedback.feedbackInternalNotes,
+      feedbackAttachments: deps.repositories.feedback.feedbackAttachments,
+      feedbackContests: deps.repositories.feedback.feedbackContests,
+      feedbackContestReasons: deps.repositories.feedback.feedbackContestReasons,
+      feedbackSlaSnapshots: deps.repositories.feedback.feedbackSlaSnapshots,
+      feedbackReopenRequests: deps.repositories.feedback.feedbackReopenRequests,
+      attachmentBlobStore,
+      feedbackContext: createFeedbackContextAdapter(deps.repositories),
       organizations: deps.repositories.organizations.organizations,
       organizationMembers: deps.repositories.organizations.organizationMembers,
       organizationSettings: deps.repositories.settings.organizationSettings,
@@ -3323,6 +3378,876 @@ export function createMswHandlers(deps: MswCompositionDependencies): readonly Ht
         }
 
         const updated = await services.bottlenecks.updateIndividualProductivityVisibility(
+          actorUserId,
+          organizationId,
+          {
+            ...rawBody,
+            correlationId: asCorrelationId(isUuid(correlationId) ? correlationId : nextUuid()),
+          },
+        );
+        return buildSuccessResponse(updated, correlationId, now, 200);
+      }),
+    ),
+
+    // =========================================================================
+    // Phase 09 — Feedbacks, SLA, Contestations & Exceptional Reopen (FeedbackService)
+    // =========================================================================
+
+    http.get(
+      '*/api/v1/organizations/:organizationId/feedbacks/export',
+      withSimulatedEndpoint(deps, async ({ request, params, correlationId, now, nextUuid }) => {
+        const actorUserId = requireActorUserId(request);
+        const organizationId = asOrganizationId(
+          String(params.organizationId ?? ''),
+          'organizationId',
+        );
+        const url = new URL(request.url);
+        const formatParam = url.searchParams.get('format');
+        const statusParam = url.searchParams.get('status');
+        const assigneeIdParam = url.searchParams.get('assigneeId');
+        const authorUserIdParam = url.searchParams.get('authorUserId');
+        const feedbackIdParam = url.searchParams.get('feedbackId');
+
+        const result = await services.feedback.exportFeedbacks(actorUserId, organizationId, {
+          format: (formatParam ? formatParam.toUpperCase() : 'JSON') as FeedbackExportFormat,
+          ...(statusParam ? { status: statusParam as FeedbackStatus } : {}),
+          ...(assigneeIdParam ? { assigneeId: asUserId(assigneeIdParam, 'assigneeId') } : {}),
+          ...(authorUserIdParam
+            ? { authorUserId: asUserId(authorUserIdParam, 'authorUserId') }
+            : {}),
+          ...(feedbackIdParam ? { feedbackId: asFeedbackId(feedbackIdParam, 'feedbackId') } : {}),
+          correlationId: asCorrelationId(isUuid(correlationId) ? correlationId : nextUuid()),
+        });
+        return buildSuccessResponse(result, correlationId, now, 200);
+      }),
+    ),
+
+    http.post(
+      '*/api/v1/organizations/:organizationId/feedbacks/evaluate-sla',
+      withSimulatedEndpoint(deps, async ({ request, params, correlationId, now, nextUuid }) => {
+        const actorUserId = requireActorUserId(request);
+        const organizationId = asOrganizationId(
+          String(params.organizationId ?? ''),
+          'organizationId',
+        );
+
+        const result = await services.feedback.evaluateFeedbackSlas(actorUserId, organizationId, {
+          correlationId: asCorrelationId(isUuid(correlationId) ? correlationId : nextUuid()),
+        });
+        return buildSuccessResponse(result, correlationId, now, 200);
+      }),
+    ),
+
+    http.get(
+      '*/api/v1/organizations/:organizationId/feedbacks/assignable-handlers',
+      withSimulatedEndpoint(deps, async ({ request, params, correlationId, now }) => {
+        const actorUserId = requireActorUserId(request);
+        const organizationId = asOrganizationId(
+          String(params.organizationId ?? ''),
+          'organizationId',
+        );
+
+        const handlers = await services.feedback.listAssignableHandlers(
+          actorUserId,
+          organizationId,
+        );
+        return buildSuccessResponse(handlers, correlationId, now, 200);
+      }),
+    ),
+
+    http.get(
+      '*/api/v1/organizations/:organizationId/feedbacks',
+      withSimulatedEndpoint(deps, async ({ request, params, correlationId, now }) => {
+        const actorUserId = requireActorUserId(request);
+        const organizationId = asOrganizationId(
+          String(params.organizationId ?? ''),
+          'organizationId',
+        );
+        const url = new URL(request.url);
+        const statusParam = url.searchParams.get('status');
+        const assigneeIdParam = url.searchParams.get('assigneeId');
+        const authorUserIdParam = url.searchParams.get('authorUserId');
+        const moduleKeyParam = url.searchParams.get('moduleKey');
+        const categoryIdParam = url.searchParams.get('categoryId');
+        const priorityParam = url.searchParams.get('priority');
+        const searchParam = url.searchParams.get('search');
+        const pageParam = url.searchParams.get('page');
+        const pageSizeParam = url.searchParams.get('pageSize');
+
+        const result = await services.feedback.listFeedbacks(actorUserId, organizationId, {
+          ...(statusParam ? { status: statusParam as FeedbackStatus } : {}),
+          ...(assigneeIdParam ? { assigneeId: asUserId(assigneeIdParam, 'assigneeId') } : {}),
+          ...(authorUserIdParam
+            ? { authorUserId: asUserId(authorUserIdParam, 'authorUserId') }
+            : {}),
+          ...(moduleKeyParam ? { moduleKey: moduleKeyParam } : {}),
+          ...(categoryIdParam
+            ? { categoryId: asFeedbackCategoryId(categoryIdParam, 'categoryId') }
+            : {}),
+          ...(priorityParam ? { priority: priorityParam as Priority } : {}),
+          ...(searchParam ? { search: searchParam } : {}),
+          ...(pageParam ? { page: Number(pageParam) } : {}),
+          ...(pageSizeParam ? { pageSize: Number(pageSizeParam) } : {}),
+        });
+        return buildSuccessResponse(result, correlationId, now, 200);
+      }),
+    ),
+
+    http.post(
+      '*/api/v1/organizations/:organizationId/feedbacks',
+      withSimulatedEndpoint(deps, async ({ request, params, correlationId, now, nextUuid }) => {
+        const actorUserId = requireActorUserId(request);
+        const organizationId = asOrganizationId(
+          String(params.organizationId ?? ''),
+          'organizationId',
+        );
+        const rawBody = (await request.json().catch(() => null)) as CreateFeedbackInput | null;
+        if (!rawBody || typeof rawBody !== 'object') {
+          throw new ValidationError('Invalid JSON body for feedback creation.');
+        }
+
+        const created = await services.feedback.createFeedback(actorUserId, organizationId, {
+          ...rawBody,
+          correlationId: asCorrelationId(isUuid(correlationId) ? correlationId : nextUuid()),
+        });
+        return buildSuccessResponse(created, correlationId, now, 201);
+      }),
+    ),
+
+    http.get(
+      '*/api/v1/organizations/:organizationId/feedbacks/:feedbackId',
+      withSimulatedEndpoint(deps, async ({ request, params, correlationId, now }) => {
+        const actorUserId = requireActorUserId(request);
+        const organizationId = asOrganizationId(
+          String(params.organizationId ?? ''),
+          'organizationId',
+        );
+        const feedbackId = asFeedbackId(String(params.feedbackId ?? ''), 'feedbackId');
+
+        const detail = await services.feedback.getFeedbackDetail(
+          actorUserId,
+          organizationId,
+          feedbackId,
+        );
+        return buildSuccessResponse(detail, correlationId, now, 200);
+      }),
+    ),
+
+    http.post(
+      '*/api/v1/organizations/:organizationId/feedbacks/:feedbackId/assign',
+      withSimulatedEndpoint(deps, async ({ request, params, correlationId, now, nextUuid }) => {
+        const actorUserId = requireActorUserId(request);
+        const organizationId = asOrganizationId(
+          String(params.organizationId ?? ''),
+          'organizationId',
+        );
+        const feedbackId = asFeedbackId(String(params.feedbackId ?? ''), 'feedbackId');
+        const rawBody = (await request.json().catch(() => null)) as AssignFeedbackInput | null;
+        if (!rawBody || typeof rawBody !== 'object') {
+          throw new ValidationError('Invalid JSON body for feedback assignment.');
+        }
+
+        const assigned = await services.feedback.assignFeedback(
+          actorUserId,
+          organizationId,
+          feedbackId,
+          {
+            ...rawBody,
+            correlationId: asCorrelationId(isUuid(correlationId) ? correlationId : nextUuid()),
+          },
+        );
+        return buildSuccessResponse(assigned, correlationId, now, 200);
+      }),
+    ),
+
+    http.patch(
+      '*/api/v1/organizations/:organizationId/feedbacks/:feedbackId/status',
+      withSimulatedEndpoint(deps, async ({ request, params, correlationId, now, nextUuid }) => {
+        const actorUserId = requireActorUserId(request);
+        const organizationId = asOrganizationId(
+          String(params.organizationId ?? ''),
+          'organizationId',
+        );
+        const feedbackId = asFeedbackId(String(params.feedbackId ?? ''), 'feedbackId');
+        const rawBody = (await request
+          .json()
+          .catch(() => null)) as TransitionFeedbackStatusInput | null;
+        if (!rawBody || typeof rawBody !== 'object') {
+          throw new ValidationError('Invalid JSON body for feedback status transition.');
+        }
+
+        const transitioned = await services.feedback.transitionFeedbackStatus(
+          actorUserId,
+          organizationId,
+          feedbackId,
+          {
+            ...rawBody,
+            correlationId: asCorrelationId(isUuid(correlationId) ? correlationId : nextUuid()),
+          },
+        );
+        return buildSuccessResponse(transitioned, correlationId, now, 200);
+      }),
+    ),
+
+    http.patch(
+      '*/api/v1/organizations/:organizationId/feedbacks/:feedbackId/triage',
+      withSimulatedEndpoint(deps, async ({ request, params, correlationId, now, nextUuid }) => {
+        const actorUserId = requireActorUserId(request);
+        const organizationId = asOrganizationId(
+          String(params.organizationId ?? ''),
+          'organizationId',
+        );
+        const feedbackId = asFeedbackId(String(params.feedbackId ?? ''), 'feedbackId');
+        const rawBody = (await request
+          .json()
+          .catch(() => null)) as UpdateFeedbackTriageInput | null;
+        if (!rawBody || typeof rawBody !== 'object') {
+          throw new ValidationError('Invalid JSON body for feedback triage update.');
+        }
+
+        const updated = await services.feedback.updateFeedbackTriage(
+          actorUserId,
+          organizationId,
+          feedbackId,
+          {
+            ...rawBody,
+            correlationId: asCorrelationId(isUuid(correlationId) ? correlationId : nextUuid()),
+          },
+        );
+        return buildSuccessResponse(updated, correlationId, now, 200);
+      }),
+    ),
+
+    http.post(
+      '*/api/v1/organizations/:organizationId/feedbacks/:feedbackId/messages',
+      withSimulatedEndpoint(deps, async ({ request, params, correlationId, now, nextUuid }) => {
+        const actorUserId = requireActorUserId(request);
+        const organizationId = asOrganizationId(
+          String(params.organizationId ?? ''),
+          'organizationId',
+        );
+        const feedbackId = asFeedbackId(String(params.feedbackId ?? ''), 'feedbackId');
+        const rawBody = (await request.json().catch(() => null)) as AddFeedbackMessageInput | null;
+        if (!rawBody || typeof rawBody !== 'object') {
+          throw new ValidationError('Invalid JSON body for feedback message.');
+        }
+
+        const result = await services.feedback.addFeedbackMessage(
+          actorUserId,
+          organizationId,
+          feedbackId,
+          {
+            ...rawBody,
+            correlationId: asCorrelationId(isUuid(correlationId) ? correlationId : nextUuid()),
+          },
+        );
+        return buildSuccessResponse(result, correlationId, now, 201);
+      }),
+    ),
+
+    http.post(
+      '*/api/v1/organizations/:organizationId/feedbacks/:feedbackId/internal-notes',
+      withSimulatedEndpoint(deps, async ({ request, params, correlationId, now, nextUuid }) => {
+        const actorUserId = requireActorUserId(request);
+        const organizationId = asOrganizationId(
+          String(params.organizationId ?? ''),
+          'organizationId',
+        );
+        const feedbackId = asFeedbackId(String(params.feedbackId ?? ''), 'feedbackId');
+        const rawBody = (await request
+          .json()
+          .catch(() => null)) as AddFeedbackInternalNoteInput | null;
+        if (!rawBody || typeof rawBody !== 'object') {
+          throw new ValidationError('Invalid JSON body for feedback internal note.');
+        }
+
+        const note = await services.feedback.addFeedbackInternalNote(
+          actorUserId,
+          organizationId,
+          feedbackId,
+          {
+            ...rawBody,
+            correlationId: asCorrelationId(isUuid(correlationId) ? correlationId : nextUuid()),
+          },
+        );
+        return buildSuccessResponse(note, correlationId, now, 201);
+      }),
+    ),
+
+    http.post(
+      '*/api/v1/organizations/:organizationId/feedbacks/:feedbackId/attachments',
+      withSimulatedEndpoint(deps, async ({ request, params, correlationId, now, nextUuid }) => {
+        const actorUserId = requireActorUserId(request);
+        const organizationId = asOrganizationId(
+          String(params.organizationId ?? ''),
+          'organizationId',
+        );
+        const feedbackId = asFeedbackId(String(params.feedbackId ?? ''), 'feedbackId');
+        const rawBody = (await request.json().catch(() => null)) as {
+          readonly fileName?: string;
+          readonly mimeType?: string;
+          readonly contentBase64?: string;
+          readonly messageId?: string;
+          readonly internalNoteId?: string;
+        } | null;
+
+        if (
+          !rawBody ||
+          typeof rawBody.fileName !== 'string' ||
+          typeof rawBody.mimeType !== 'string' ||
+          typeof rawBody.contentBase64 !== 'string'
+        ) {
+          throw new ValidationError(
+            'Feedback attachment upload requires "fileName", "mimeType", and "contentBase64" strings.',
+          );
+        }
+
+        const bytes = decodeBase64ToUint8Array(rawBody.contentBase64);
+        const uploaded = await services.feedback.uploadFeedbackAttachment(
+          actorUserId,
+          organizationId,
+          feedbackId,
+          {
+            fileName: rawBody.fileName,
+            mimeType: rawBody.mimeType,
+            bytes,
+            ...(rawBody.messageId !== undefined
+              ? { messageId: asFeedbackMessageId(rawBody.messageId, 'messageId') }
+              : {}),
+            ...(rawBody.internalNoteId !== undefined
+              ? {
+                  internalNoteId: asFeedbackInternalNoteId(
+                    rawBody.internalNoteId,
+                    'internalNoteId',
+                  ),
+                }
+              : {}),
+            correlationId: asCorrelationId(isUuid(correlationId) ? correlationId : nextUuid()),
+          },
+        );
+        return buildSuccessResponse(uploaded, correlationId, now, 201);
+      }),
+    ),
+
+    http.get(
+      '*/api/v1/organizations/:organizationId/feedbacks/:feedbackId/attachments/:attachmentId/download',
+      withSimulatedEndpoint(deps, async ({ request, params, correlationId, now }) => {
+        const actorUserId = requireActorUserId(request);
+        const organizationId = asOrganizationId(
+          String(params.organizationId ?? ''),
+          'organizationId',
+        );
+        const feedbackId = asFeedbackId(String(params.feedbackId ?? ''), 'feedbackId');
+        const attachmentId = asAttachmentId(String(params.attachmentId ?? ''), 'attachmentId');
+
+        const content = await services.feedback.getFeedbackAttachmentContent(
+          actorUserId,
+          organizationId,
+          feedbackId,
+          attachmentId,
+        );
+
+        return buildSuccessResponse(
+          {
+            attachment: content.attachment,
+            mimeType: content.mimeType,
+            contentBase64: encodeUint8ArrayToBase64(content.bytes),
+          },
+          correlationId,
+          now,
+          200,
+        );
+      }),
+    ),
+
+    http.post(
+      '*/api/v1/organizations/:organizationId/feedbacks/:feedbackId/confirm-resolution',
+      withSimulatedEndpoint(deps, async ({ request, params, correlationId, now, nextUuid }) => {
+        const actorUserId = requireActorUserId(request);
+        const organizationId = asOrganizationId(
+          String(params.organizationId ?? ''),
+          'organizationId',
+        );
+        const feedbackId = asFeedbackId(String(params.feedbackId ?? ''), 'feedbackId');
+
+        const confirmed = await services.feedback.confirmFeedbackResolution(
+          actorUserId,
+          organizationId,
+          feedbackId,
+          {
+            correlationId: asCorrelationId(isUuid(correlationId) ? correlationId : nextUuid()),
+          },
+        );
+        return buildSuccessResponse(confirmed, correlationId, now, 200);
+      }),
+    ),
+
+    http.post(
+      '*/api/v1/organizations/:organizationId/feedbacks/:feedbackId/contests',
+      withSimulatedEndpoint(deps, async ({ request, params, correlationId, now, nextUuid }) => {
+        const actorUserId = requireActorUserId(request);
+        const organizationId = asOrganizationId(
+          String(params.organizationId ?? ''),
+          'organizationId',
+        );
+        const feedbackId = asFeedbackId(String(params.feedbackId ?? ''), 'feedbackId');
+        const rawBody = (await request.json().catch(() => null)) as OpenFeedbackContestInput | null;
+        if (!rawBody || typeof rawBody !== 'object') {
+          throw new ValidationError('Invalid JSON body for opening feedback contest.');
+        }
+
+        const contest = await services.feedback.openFeedbackContest(
+          actorUserId,
+          organizationId,
+          feedbackId,
+          {
+            ...rawBody,
+            correlationId: asCorrelationId(isUuid(correlationId) ? correlationId : nextUuid()),
+          },
+        );
+        return buildSuccessResponse(contest, correlationId, now, 201);
+      }),
+    ),
+
+    http.post(
+      '*/api/v1/organizations/:organizationId/feedbacks/:feedbackId/contests/:contestId/delegate',
+      withSimulatedEndpoint(deps, async ({ request, params, correlationId, now, nextUuid }) => {
+        const actorUserId = requireActorUserId(request);
+        const organizationId = asOrganizationId(
+          String(params.organizationId ?? ''),
+          'organizationId',
+        );
+        const feedbackId = asFeedbackId(String(params.feedbackId ?? ''), 'feedbackId');
+        const contestId = asFeedbackContestId(String(params.contestId ?? ''), 'contestId');
+        const rawBody = (await request
+          .json()
+          .catch(() => null)) as DelegateContestAnalysisInput | null;
+        if (!rawBody || typeof rawBody !== 'object') {
+          throw new ValidationError('Invalid JSON body for contest analysis delegation.');
+        }
+
+        const contest = await services.feedback.delegateFeedbackContestAnalysis(
+          actorUserId,
+          organizationId,
+          feedbackId,
+          contestId,
+          {
+            ...rawBody,
+            correlationId: asCorrelationId(isUuid(correlationId) ? correlationId : nextUuid()),
+          },
+        );
+        return buildSuccessResponse(contest, correlationId, now, 200);
+      }),
+    ),
+
+    http.post(
+      '*/api/v1/organizations/:organizationId/feedbacks/:feedbackId/contests/:contestId/analysis',
+      withSimulatedEndpoint(deps, async ({ request, params, correlationId, now, nextUuid }) => {
+        const actorUserId = requireActorUserId(request);
+        const organizationId = asOrganizationId(
+          String(params.organizationId ?? ''),
+          'organizationId',
+        );
+        const feedbackId = asFeedbackId(String(params.feedbackId ?? ''), 'feedbackId');
+        const contestId = asFeedbackContestId(String(params.contestId ?? ''), 'contestId');
+        const rawBody = (await request
+          .json()
+          .catch(() => null)) as SubmitContestAnalysisInput | null;
+        if (!rawBody || typeof rawBody !== 'object') {
+          throw new ValidationError('Invalid JSON body for contest analysis submission.');
+        }
+
+        const analysis = await services.feedback.submitFeedbackContestAnalysis(
+          actorUserId,
+          organizationId,
+          feedbackId,
+          contestId,
+          {
+            ...rawBody,
+            correlationId: asCorrelationId(isUuid(correlationId) ? correlationId : nextUuid()),
+          },
+        );
+        return buildSuccessResponse(analysis, correlationId, now, 201);
+      }),
+    ),
+
+    http.post(
+      '*/api/v1/organizations/:organizationId/feedbacks/:feedbackId/contests/:contestId/decision',
+      withSimulatedEndpoint(deps, async ({ request, params, correlationId, now, nextUuid }) => {
+        const actorUserId = requireActorUserId(request);
+        const organizationId = asOrganizationId(
+          String(params.organizationId ?? ''),
+          'organizationId',
+        );
+        const feedbackId = asFeedbackId(String(params.feedbackId ?? ''), 'feedbackId');
+        const contestId = asFeedbackContestId(String(params.contestId ?? ''), 'contestId');
+        const rawBody = (await request.json().catch(() => null)) as DecideContestInput | null;
+        if (!rawBody || typeof rawBody !== 'object') {
+          throw new ValidationError('Invalid JSON body for contest decision.');
+        }
+
+        const decided = await services.feedback.decideFeedbackContest(
+          actorUserId,
+          organizationId,
+          feedbackId,
+          contestId,
+          {
+            ...rawBody,
+            correlationId: asCorrelationId(isUuid(correlationId) ? correlationId : nextUuid()),
+          },
+        );
+        return buildSuccessResponse(decided, correlationId, now, 200);
+      }),
+    ),
+
+    http.post(
+      '*/api/v1/organizations/:organizationId/feedbacks/:feedbackId/reopen-requests',
+      withSimulatedEndpoint(deps, async ({ request, params, correlationId, now, nextUuid }) => {
+        const actorUserId = requireActorUserId(request);
+        const organizationId = asOrganizationId(
+          String(params.organizationId ?? ''),
+          'organizationId',
+        );
+        const feedbackId = asFeedbackId(String(params.feedbackId ?? ''), 'feedbackId');
+        const rawBody = (await request
+          .json()
+          .catch(() => null)) as RequestExceptionalReopenInput | null;
+        if (!rawBody || typeof rawBody !== 'object') {
+          throw new ValidationError('Invalid JSON body for exceptional reopen request.');
+        }
+
+        const reopenedReq = await services.feedback.requestExceptionalReopen(
+          actorUserId,
+          organizationId,
+          feedbackId,
+          {
+            ...rawBody,
+            correlationId: asCorrelationId(isUuid(correlationId) ? correlationId : nextUuid()),
+          },
+        );
+        return buildSuccessResponse(reopenedReq, correlationId, now, 201);
+      }),
+    ),
+
+    http.post(
+      '*/api/v1/organizations/:organizationId/feedbacks/:feedbackId/reopen-requests/:requestId/decision',
+      withSimulatedEndpoint(deps, async ({ request, params, correlationId, now, nextUuid }) => {
+        const actorUserId = requireActorUserId(request);
+        const organizationId = asOrganizationId(
+          String(params.organizationId ?? ''),
+          'organizationId',
+        );
+        const feedbackId = asFeedbackId(String(params.feedbackId ?? ''), 'feedbackId');
+        const requestId = asFeedbackReopenRequestId(String(params.requestId ?? ''), 'requestId');
+        const rawBody = (await request
+          .json()
+          .catch(() => null)) as DecideExceptionalReopenInput | null;
+        if (!rawBody || typeof rawBody !== 'object') {
+          throw new ValidationError('Invalid JSON body for exceptional reopen decision.');
+        }
+
+        const decided = await services.feedback.decideExceptionalReopen(
+          actorUserId,
+          organizationId,
+          feedbackId,
+          requestId,
+          {
+            ...rawBody,
+            correlationId: asCorrelationId(isUuid(correlationId) ? correlationId : nextUuid()),
+          },
+        );
+        return buildSuccessResponse(decided, correlationId, now, 200);
+      }),
+    ),
+
+    // Feedback Categories (versioned catalog)
+    http.get(
+      '*/api/v1/organizations/:organizationId/feedback-categories',
+      withSimulatedEndpoint(deps, async ({ request, params, correlationId, now }) => {
+        const actorUserId = requireActorUserId(request);
+        const organizationId = asOrganizationId(
+          String(params.organizationId ?? ''),
+          'organizationId',
+        );
+        const includeInactive = new URL(request.url).searchParams.get('includeInactive') === 'true';
+
+        const categories = await services.feedback.listFeedbackCategories(
+          actorUserId,
+          organizationId,
+          { includeInactive },
+        );
+        return buildSuccessResponse(categories, correlationId, now, 200);
+      }),
+    ),
+
+    http.post(
+      '*/api/v1/organizations/:organizationId/feedback-categories/reorder',
+      withSimulatedEndpoint(deps, async ({ request, params, correlationId, now, nextUuid }) => {
+        const actorUserId = requireActorUserId(request);
+        const organizationId = asOrganizationId(
+          String(params.organizationId ?? ''),
+          'organizationId',
+        );
+        const rawBody = (await request
+          .json()
+          .catch(() => null)) as ReorderFeedbackCategoriesInput | null;
+        if (!rawBody || typeof rawBody !== 'object') {
+          throw new ValidationError('Invalid JSON body for category reorder.');
+        }
+
+        const reordered = await services.feedback.reorderFeedbackCategories(
+          actorUserId,
+          organizationId,
+          {
+            ...rawBody,
+            correlationId: asCorrelationId(isUuid(correlationId) ? correlationId : nextUuid()),
+          },
+        );
+        return buildSuccessResponse(reordered, correlationId, now, 200);
+      }),
+    ),
+
+    http.post(
+      '*/api/v1/organizations/:organizationId/feedback-categories',
+      withSimulatedEndpoint(deps, async ({ request, params, correlationId, now, nextUuid }) => {
+        const actorUserId = requireActorUserId(request);
+        const organizationId = asOrganizationId(
+          String(params.organizationId ?? ''),
+          'organizationId',
+        );
+        const rawBody = (await request.json().catch(() => null)) as CreateCatalogItemInput | null;
+        if (!rawBody || typeof rawBody !== 'object') {
+          throw new ValidationError('Invalid JSON body for feedback category creation.');
+        }
+
+        const created = await services.feedback.createFeedbackCategory(
+          actorUserId,
+          organizationId,
+          {
+            ...rawBody,
+            correlationId: asCorrelationId(isUuid(correlationId) ? correlationId : nextUuid()),
+          },
+        );
+        return buildSuccessResponse(created, correlationId, now, 201);
+      }),
+    ),
+
+    http.patch(
+      '*/api/v1/organizations/:organizationId/feedback-categories/:categoryId',
+      withSimulatedEndpoint(deps, async ({ request, params, correlationId, now, nextUuid }) => {
+        const actorUserId = requireActorUserId(request);
+        const organizationId = asOrganizationId(
+          String(params.organizationId ?? ''),
+          'organizationId',
+        );
+        const categoryId = asFeedbackCategoryId(String(params.categoryId ?? ''), 'categoryId');
+        const rawBody = (await request.json().catch(() => null)) as UpdateCatalogItemInput | null;
+        if (!rawBody || typeof rawBody !== 'object') {
+          throw new ValidationError('Invalid JSON body for feedback category update.');
+        }
+
+        const updated = await services.feedback.updateFeedbackCategory(
+          actorUserId,
+          organizationId,
+          categoryId,
+          {
+            ...rawBody,
+            correlationId: asCorrelationId(isUuid(correlationId) ? correlationId : nextUuid()),
+          },
+        );
+        return buildSuccessResponse(updated, correlationId, now, 200);
+      }),
+    ),
+
+    http.delete(
+      '*/api/v1/organizations/:organizationId/feedback-categories/:categoryId',
+      withSimulatedEndpoint(deps, async ({ request, params, correlationId, now, nextUuid }) => {
+        const actorUserId = requireActorUserId(request);
+        const organizationId = asOrganizationId(
+          String(params.organizationId ?? ''),
+          'organizationId',
+        );
+        const categoryId = asFeedbackCategoryId(String(params.categoryId ?? ''), 'categoryId');
+        const rawBody = (await request.json().catch(() => null)) as {
+          readonly reason?: string;
+        } | null;
+        const reason =
+          rawBody?.reason ?? new URL(request.url).searchParams.get('reason') ?? undefined;
+
+        const deleted = await services.feedback.deleteFeedbackCategory(
+          actorUserId,
+          organizationId,
+          categoryId,
+          {
+            ...(reason !== undefined ? { reason } : {}),
+            correlationId: asCorrelationId(isUuid(correlationId) ? correlationId : nextUuid()),
+          },
+        );
+        return buildSuccessResponse(deleted, correlationId, now, 200);
+      }),
+    ),
+
+    // Feedback Contest Reasons (versioned catalog)
+    http.get(
+      '*/api/v1/organizations/:organizationId/feedback-contest-reasons',
+      withSimulatedEndpoint(deps, async ({ request, params, correlationId, now }) => {
+        const actorUserId = requireActorUserId(request);
+        const organizationId = asOrganizationId(
+          String(params.organizationId ?? ''),
+          'organizationId',
+        );
+        const includeInactive = new URL(request.url).searchParams.get('includeInactive') === 'true';
+
+        const reasons = await services.feedback.listFeedbackContestReasons(
+          actorUserId,
+          organizationId,
+          { includeInactive },
+        );
+        return buildSuccessResponse(reasons, correlationId, now, 200);
+      }),
+    ),
+
+    http.post(
+      '*/api/v1/organizations/:organizationId/feedback-contest-reasons/reorder',
+      withSimulatedEndpoint(deps, async ({ request, params, correlationId, now, nextUuid }) => {
+        const actorUserId = requireActorUserId(request);
+        const organizationId = asOrganizationId(
+          String(params.organizationId ?? ''),
+          'organizationId',
+        );
+        const rawBody = (await request
+          .json()
+          .catch(() => null)) as ReorderFeedbackContestReasonsInput | null;
+        if (!rawBody || typeof rawBody !== 'object') {
+          throw new ValidationError('Invalid JSON body for contest reason reorder.');
+        }
+
+        const reordered = await services.feedback.reorderFeedbackContestReasons(
+          actorUserId,
+          organizationId,
+          {
+            ...rawBody,
+            correlationId: asCorrelationId(isUuid(correlationId) ? correlationId : nextUuid()),
+          },
+        );
+        return buildSuccessResponse(reordered, correlationId, now, 200);
+      }),
+    ),
+
+    http.post(
+      '*/api/v1/organizations/:organizationId/feedback-contest-reasons',
+      withSimulatedEndpoint(deps, async ({ request, params, correlationId, now, nextUuid }) => {
+        const actorUserId = requireActorUserId(request);
+        const organizationId = asOrganizationId(
+          String(params.organizationId ?? ''),
+          'organizationId',
+        );
+        const rawBody = (await request.json().catch(() => null)) as CreateCatalogItemInput | null;
+        if (!rawBody || typeof rawBody !== 'object') {
+          throw new ValidationError('Invalid JSON body for contest reason creation.');
+        }
+
+        const created = await services.feedback.createFeedbackContestReason(
+          actorUserId,
+          organizationId,
+          {
+            ...rawBody,
+            correlationId: asCorrelationId(isUuid(correlationId) ? correlationId : nextUuid()),
+          },
+        );
+        return buildSuccessResponse(created, correlationId, now, 201);
+      }),
+    ),
+
+    http.patch(
+      '*/api/v1/organizations/:organizationId/feedback-contest-reasons/:reasonId',
+      withSimulatedEndpoint(deps, async ({ request, params, correlationId, now, nextUuid }) => {
+        const actorUserId = requireActorUserId(request);
+        const organizationId = asOrganizationId(
+          String(params.organizationId ?? ''),
+          'organizationId',
+        );
+        const reasonId = asFeedbackContestReasonId(String(params.reasonId ?? ''), 'reasonId');
+        const rawBody = (await request.json().catch(() => null)) as UpdateCatalogItemInput | null;
+        if (!rawBody || typeof rawBody !== 'object') {
+          throw new ValidationError('Invalid JSON body for contest reason update.');
+        }
+
+        const updated = await services.feedback.updateFeedbackContestReason(
+          actorUserId,
+          organizationId,
+          reasonId,
+          {
+            ...rawBody,
+            correlationId: asCorrelationId(isUuid(correlationId) ? correlationId : nextUuid()),
+          },
+        );
+        return buildSuccessResponse(updated, correlationId, now, 200);
+      }),
+    ),
+
+    http.delete(
+      '*/api/v1/organizations/:organizationId/feedback-contest-reasons/:reasonId',
+      withSimulatedEndpoint(deps, async ({ request, params, correlationId, now, nextUuid }) => {
+        const actorUserId = requireActorUserId(request);
+        const organizationId = asOrganizationId(
+          String(params.organizationId ?? ''),
+          'organizationId',
+        );
+        const reasonId = asFeedbackContestReasonId(String(params.reasonId ?? ''), 'reasonId');
+        const rawBody = (await request.json().catch(() => null)) as {
+          readonly reason?: string;
+        } | null;
+        const reason =
+          rawBody?.reason ?? new URL(request.url).searchParams.get('reason') ?? undefined;
+
+        const deleted = await services.feedback.deleteFeedbackContestReason(
+          actorUserId,
+          organizationId,
+          reasonId,
+          {
+            ...(reason !== undefined ? { reason } : {}),
+            correlationId: asCorrelationId(isUuid(correlationId) ? correlationId : nextUuid()),
+          },
+        );
+        return buildSuccessResponse(deleted, correlationId, now, 200);
+      }),
+    ),
+
+    // Feedback SLA Settings
+    http.get(
+      '*/api/v1/organizations/:organizationId/settings/feedback-sla',
+      withSimulatedEndpoint(deps, async ({ request, params, correlationId, now }) => {
+        const actorUserId = requireActorUserId(request);
+        const organizationId = asOrganizationId(
+          String(params.organizationId ?? ''),
+          'organizationId',
+        );
+
+        const settingsView = await services.feedback.getFeedbackSlaSettings(
+          actorUserId,
+          organizationId,
+        );
+        return buildSuccessResponse(settingsView, correlationId, now, 200);
+      }),
+    ),
+
+    http.patch(
+      '*/api/v1/organizations/:organizationId/settings/feedback-sla',
+      withSimulatedEndpoint(deps, async ({ request, params, correlationId, now, nextUuid }) => {
+        const actorUserId = requireActorUserId(request);
+        const organizationId = asOrganizationId(
+          String(params.organizationId ?? ''),
+          'organizationId',
+        );
+        const rawBody = (await request
+          .json()
+          .catch(() => null)) as UpdateFeedbackSlaSettingsInput | null;
+        if (!rawBody || typeof rawBody !== 'object') {
+          throw new ValidationError('Invalid JSON body for feedback SLA settings update.');
+        }
+
+        const updated = await services.feedback.updateFeedbackSlaSettings(
           actorUserId,
           organizationId,
           {

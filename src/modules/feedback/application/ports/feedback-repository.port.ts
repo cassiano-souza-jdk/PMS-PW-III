@@ -47,6 +47,7 @@ export interface FeedbackRepositoryPort {
 
 export interface FeedbackCycleRepositoryPort {
   findById(organizationId: OrganizationId, cycleId: FeedbackCycleId): Promise<FeedbackCycle | null>;
+  listByOrganization(organizationId: OrganizationId): Promise<readonly FeedbackCycle[]>;
   listByFeedback(
     organizationId: OrganizationId,
     feedbackId: FeedbackId,
@@ -165,6 +166,7 @@ export interface FeedbackSlaSnapshotRepositoryPort {
     organizationId: OrganizationId,
     cycleId: FeedbackCycleId,
   ): Promise<FeedbackSlaSnapshot | null>;
+  listByOrganization(organizationId: OrganizationId): Promise<readonly FeedbackSlaSnapshot[]>;
   listByFeedback(
     organizationId: OrganizationId,
     feedbackId: FeedbackId,

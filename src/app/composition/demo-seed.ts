@@ -11,16 +11,26 @@ import {
   asMaintenanceEventId,
 } from '@/modules/demo';
 import {
+  CYCLE_ORIGINS,
+  FEEDBACK_STATUSES,
   INITIAL_CONTEST_REASONS,
   INITIAL_FEEDBACK_CATEGORIES,
   asFeedbackCategoryId,
   asFeedbackCategoryVersionId,
   asFeedbackContestReasonId,
   asFeedbackContestReasonVersionId,
+  asFeedbackInternalNoteId,
+  asFeedbackMessageId,
+  asFeedbackSlaSnapshotId,
+  type Feedback,
   type FeedbackCategory,
   type FeedbackCategoryVersion,
   type FeedbackContestReason,
   type FeedbackContestReasonVersion,
+  type FeedbackCycle,
+  type FeedbackInternalNote,
+  type FeedbackMessage,
+  type FeedbackSlaSnapshot,
 } from '@/modules/feedback';
 import { BOARD_COLUMN_ROLES, type BoardColumn, type ProjectBoard } from '@/modules/kanban';
 import {
@@ -49,6 +59,9 @@ import {
   asBoardId,
   asCorrelationId,
   asEventId,
+  asFeedbackCycleId,
+  asFeedbackId,
+  asIsoDate,
   asIsoDateTime,
   asOrganizationId,
   asProjectId,
@@ -96,6 +109,11 @@ export const DEMO_COLUMN_IDS = Object.freeze({
 export const DEMO_TASK_IDS = Object.freeze({
   FOUNDATION_TASK: asTaskId('11111111-1111-4111-8111-111111111801'),
   KANBAN_FLOW_TASK: asTaskId('11111111-1111-4111-8111-111111111802'),
+});
+
+export const DEMO_FEEDBACK_IDS = Object.freeze({
+  IN_PROGRESS_BUG: asFeedbackId('22222222-2222-4222-8222-222222221001'),
+  RESOLVED_IMPROVEMENT: asFeedbackId('22222222-2222-4222-8222-222222221002'),
 });
 
 export const DEMO_MAINTENANCE_EVENT_ID = asMaintenanceEventId(
@@ -166,7 +184,9 @@ function buildDeterministicFeedbackCatalog(now: IsoDateTime): {
       currentVersionId: versionId,
       active: true,
       sortOrder: index + 1,
-      hasBeenUsed: false,
+      hasBeenUsed:
+        code === INITIAL_FEEDBACK_CATEGORIES.BUG_ERROR ||
+        code === INITIAL_FEEDBACK_CATEGORIES.IMPROVEMENT,
       createdAt: now,
       updatedAt: now,
     });
@@ -348,6 +368,11 @@ export async function ensureDemoOrganizationSeeded(
       TRANSACTION_RESOURCES.BOARD_COLUMNS,
       TRANSACTION_RESOURCES.TASKS,
       TRANSACTION_RESOURCES.TASK_EXECUTION_CYCLES,
+      TRANSACTION_RESOURCES.FEEDBACKS,
+      TRANSACTION_RESOURCES.FEEDBACK_CYCLES,
+      TRANSACTION_RESOURCES.FEEDBACK_SLA_SNAPSHOTS,
+      TRANSACTION_RESOURCES.FEEDBACK_MESSAGES,
+      TRANSACTION_RESOURCES.FEEDBACK_INTERNAL_NOTES,
       TRANSACTION_RESOURCES.FEEDBACK_CATEGORIES,
       TRANSACTION_RESOURCES.FEEDBACK_CATEGORY_VERSIONS,
       TRANSACTION_RESOURCES.FEEDBACK_CONTEST_REASONS,
@@ -670,6 +695,174 @@ export async function ensureDemoOrganizationSeeded(
       for (const version of catalog.reasonVersions) {
         await deps.repositories.feedback.feedbackContestReasons.saveVersion(version);
       }
+
+      const bugCategory = catalog.categories[0]!;
+      const improvementCategory = catalog.categories[1]!;
+      const nowMs = Date.parse(now);
+      const manifestationDeadline = asIsoDateTime(
+        new Date(nowMs + defaultSettings.feedbackManifestationWindowMs).toISOString(),
+      );
+      const contestDeadline = asIsoDateTime(
+        new Date(nowMs + defaultSettings.feedbackContestWindowMs).toISOString(),
+      );
+
+      const cycle1Id = asFeedbackCycleId('22222222-2222-4222-8222-222222221101');
+      const cycle2Id = asFeedbackCycleId('22222222-2222-4222-8222-222222221102');
+      const snapshot1Id = asFeedbackSlaSnapshotId('22222222-2222-4222-8222-222222221201');
+      const snapshot2Id = asFeedbackSlaSnapshotId('22222222-2222-4222-8222-222222221202');
+
+      const demoFeedbacks: readonly Feedback[] = [
+        {
+          id: DEMO_FEEDBACK_IDS.IN_PROGRESS_BUG,
+          organizationId: DEMO_ORG_ID,
+          authorUserId: DEMO_MEMBER_USER_ID,
+          moduleKey: 'kanban',
+          categoryId: bugCategory.id,
+          categoryVersionId: bugCategory.currentVersionId,
+          title: 'Ajustar indicacao visual de limite WIP no quadro Kanban',
+          description:
+            'Quando uma coluna atinge o limite de WIP, o destaque preventivo pode ficar mais evidente no modo teclado.',
+          priority: PRIORITIES.HIGH,
+          status: FEEDBACK_STATUSES.IN_PROGRESS,
+          assigneeId: DEMO_MANAGER_USER_ID,
+          currentCycleId: cycle1Id,
+          authorConfirmedResolution: false,
+          createdAt: now,
+          updatedAt: now,
+        },
+        {
+          id: DEMO_FEEDBACK_IDS.RESOLVED_IMPROVEMENT,
+          organizationId: DEMO_ORG_ID,
+          authorUserId: DEMO_MEMBER_USER_ID,
+          moduleKey: 'focus',
+          categoryId: improvementCategory.id,
+          categoryVersionId: improvementCategory.currentVersionId,
+          title: 'Atalho rapido para limpar filtros do Modo Foco',
+          description: 'Incluir botao de reset rapido dos filtros no painel pessoal do Modo Foco.',
+          priority: PRIORITIES.MEDIUM,
+          status: FEEDBACK_STATUSES.RESOLVED,
+          assigneeId: DEMO_ADMIN_USER_ID,
+          currentCycleId: cycle2Id,
+          authorConfirmedResolution: false,
+          createdAt: now,
+          updatedAt: now,
+        },
+      ];
+
+      for (const feedback of demoFeedbacks) {
+        await deps.repositories.feedback.feedbacks.save(feedback);
+      }
+
+      const demoFeedbackCycles: readonly FeedbackCycle[] = [
+        {
+          id: cycle1Id,
+          organizationId: DEMO_ORG_ID,
+          feedbackId: DEMO_FEEDBACK_IDS.IN_PROGRESS_BUG,
+          cycleNumber: 1,
+          origin: CYCLE_ORIGINS.INITIAL,
+          status: FEEDBACK_STATUSES.IN_PROGRESS,
+          prioritySnapshot: PRIORITIES.HIGH,
+          initialAssigneeId: DEMO_MANAGER_USER_ID,
+          assigneeId: DEMO_MANAGER_USER_ID,
+          slaSnapshotId: snapshot1Id,
+          startedAt: now,
+          firstRespondedAt: now,
+          authorConfirmedResolution: false,
+        },
+        {
+          id: cycle2Id,
+          organizationId: DEMO_ORG_ID,
+          feedbackId: DEMO_FEEDBACK_IDS.RESOLVED_IMPROVEMENT,
+          cycleNumber: 1,
+          origin: CYCLE_ORIGINS.INITIAL,
+          status: FEEDBACK_STATUSES.RESOLVED,
+          prioritySnapshot: PRIORITIES.MEDIUM,
+          initialAssigneeId: DEMO_ADMIN_USER_ID,
+          assigneeId: DEMO_ADMIN_USER_ID,
+          slaSnapshotId: snapshot2Id,
+          startedAt: now,
+          firstRespondedAt: now,
+          resolvedAt: now,
+          resolutionDescription: 'Botao de limpeza rapida implementado e validado na interface.',
+          manifestationDeadlineAt: manifestationDeadline,
+          contestDeadlineAt: contestDeadline,
+          authorConfirmedResolution: false,
+        },
+      ];
+
+      for (const cycle of demoFeedbackCycles) {
+        await deps.repositories.feedback.feedbackCycles.save(cycle);
+      }
+
+      const demoSlaSnapshots: readonly FeedbackSlaSnapshot[] = [
+        {
+          id: snapshot1Id,
+          organizationId: DEMO_ORG_ID,
+          feedbackId: DEMO_FEEDBACK_IDS.IN_PROGRESS_BUG,
+          cycleId: cycle1Id,
+          prioritySnapshot: PRIORITIES.HIGH,
+          calendarMode: defaultSettings.calendar.mode,
+          workDaysOfWeekUtc: [...defaultSettings.calendar.workDaysOfWeekUtc],
+          workStartHourUtc: defaultSettings.calendar.workStartHourUtc,
+          workEndHourUtc: defaultSettings.calendar.workEndHourUtc,
+          breakIntervalsUtc: defaultSettings.calendar.breakIntervalsUtc.map((b) => ({ ...b })),
+          holidayDates: defaultSettings.calendar.holidayDates.map((d) => asIsoDate(d)),
+          firstResponseTargetMs:
+            defaultSettings.slaPoliciesByPriority[PRIORITIES.HIGH].firstResponseTargetMs,
+          resolutionTargetMs:
+            defaultSettings.slaPoliciesByPriority[PRIORITIES.HIGH].resolutionTargetMs,
+          manifestationWindowMs: defaultSettings.feedbackManifestationWindowMs,
+          contestWindowMs: defaultSettings.feedbackContestWindowMs,
+          capturedAt: now,
+        },
+        {
+          id: snapshot2Id,
+          organizationId: DEMO_ORG_ID,
+          feedbackId: DEMO_FEEDBACK_IDS.RESOLVED_IMPROVEMENT,
+          cycleId: cycle2Id,
+          prioritySnapshot: PRIORITIES.MEDIUM,
+          calendarMode: defaultSettings.calendar.mode,
+          workDaysOfWeekUtc: [...defaultSettings.calendar.workDaysOfWeekUtc],
+          workStartHourUtc: defaultSettings.calendar.workStartHourUtc,
+          workEndHourUtc: defaultSettings.calendar.workEndHourUtc,
+          breakIntervalsUtc: defaultSettings.calendar.breakIntervalsUtc.map((b) => ({ ...b })),
+          holidayDates: defaultSettings.calendar.holidayDates.map((d) => asIsoDate(d)),
+          firstResponseTargetMs:
+            defaultSettings.slaPoliciesByPriority[PRIORITIES.MEDIUM].firstResponseTargetMs,
+          resolutionTargetMs:
+            defaultSettings.slaPoliciesByPriority[PRIORITIES.MEDIUM].resolutionTargetMs,
+          manifestationWindowMs: defaultSettings.feedbackManifestationWindowMs,
+          contestWindowMs: defaultSettings.feedbackContestWindowMs,
+          capturedAt: now,
+        },
+      ];
+
+      for (const snapshot of demoSlaSnapshots) {
+        await deps.repositories.feedback.feedbackSlaSnapshots.save(snapshot);
+      }
+
+      const demoPublicMessage: FeedbackMessage = {
+        id: asFeedbackMessageId('22222222-2222-4222-8222-222222221301'),
+        organizationId: DEMO_ORG_ID,
+        feedbackId: DEMO_FEEDBACK_IDS.IN_PROGRESS_BUG,
+        cycleId: cycle1Id,
+        authorUserId: DEMO_MANAGER_USER_ID,
+        body: 'Recebemos sua sugestao e estamos ajustando o contraste do alerta preventivo de WIP.',
+        createdAt: now,
+      };
+      await deps.repositories.feedback.feedbackMessages.append(demoPublicMessage);
+
+      const demoInternalNote: FeedbackInternalNote = {
+        id: asFeedbackInternalNoteId('22222222-2222-4222-8222-222222221401'),
+        organizationId: DEMO_ORG_ID,
+        feedbackId: DEMO_FEEDBACK_IDS.IN_PROGRESS_BUG,
+        cycleId: cycle1Id,
+        authorUserId: DEMO_MANAGER_USER_ID,
+        body: 'Nota interna de triagem: alinhar tokens WCAG AA com o time de apresentacao.',
+        mentionedUserIds: [DEMO_ADMIN_USER_ID],
+        createdAt: now,
+      };
+      await deps.repositories.feedback.feedbackInternalNotes.append(demoInternalNote);
 
       await deps.repositories.demo.maintenanceEvents.append({
         id: DEMO_MAINTENANCE_EVENT_ID,
