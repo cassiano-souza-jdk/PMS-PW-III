@@ -84,6 +84,20 @@ export function AppShell() {
         kind: 'BOTTLENECK',
         ownerUserId: user.id,
       }));
+  const canViewFeedback =
+    isAuthenticated &&
+    user !== null &&
+    activeOrganization !== null &&
+    (can(PERMISSION_CODES.FEEDBACK_CREATE) ||
+      can(PERMISSION_CODES.FEEDBACK_VIEW, {
+        kind: 'FEEDBACK',
+        createdBy: user.id,
+      }) ||
+      can(PERMISSION_CODES.FEEDBACK_VIEW, {
+        kind: 'FEEDBACK',
+        assigneeId: user.id,
+      }) ||
+      can(PERMISSION_CODES.FEEDBACK_VIEW));
 
   const handleOrganizationChange = (event: ChangeEvent<HTMLSelectElement>) => {
     const selected = organizations.find((org) => org.id === event.target.value);
@@ -205,6 +219,13 @@ export function AppShell() {
                       <li>
                         <NavLink to="/bottlenecks" className={navLinkClassName}>
                           {intl.formatMessage({ id: 'nav.bottlenecks' })}
+                        </NavLink>
+                      </li>
+                    ) : null}
+                    {canViewFeedback ? (
+                      <li>
+                        <NavLink to="/feedback" className={navLinkClassName}>
+                          {intl.formatMessage({ id: 'nav.feedback' })}
                         </NavLink>
                       </li>
                     ) : null}

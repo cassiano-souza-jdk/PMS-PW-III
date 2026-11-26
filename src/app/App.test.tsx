@@ -53,9 +53,11 @@ describe('App foundation shell, routing, theme and accessibility', () => {
     expect(skipLink).toHaveAttribute('href', '#main-content');
 
     expect(screen.getByRole('banner')).toBeInTheDocument();
+    const primaryNav = screen.getByRole('navigation', { name: ptBRMessages['nav.primaryLabel'] });
+    expect(primaryNav).toBeInTheDocument();
     expect(
-      screen.getByRole('navigation', { name: ptBRMessages['nav.primaryLabel'] }),
-    ).toBeInTheDocument();
+      within(primaryNav).queryByRole('link', { name: ptBRMessages['nav.feedback'] }),
+    ).not.toBeInTheDocument();
     const main = screen.getByRole('main');
     expect(main).toHaveAttribute('id', 'main-content');
     const footer = screen.getByRole('contentinfo');
