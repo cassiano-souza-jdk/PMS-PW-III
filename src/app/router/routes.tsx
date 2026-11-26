@@ -4,6 +4,9 @@ import {
   LazyAcceptInvitationPage,
   LazyBottlenecksPage,
   LazyDemoPage,
+  LazyFeedbackDetailPage,
+  LazyFeedbackGovernancePage,
+  LazyFeedbackPage,
   LazyFocusPage,
   LazyFoundationHomePage,
   LazyInvitationsPage,
@@ -86,6 +89,18 @@ export const appRoutes: RouteObject[] = [
           {
             path: 'projects/:projectId/bottlenecks',
             element: <LazyBottlenecksPage />,
+          },
+          {
+            path: 'feedback',
+            element: <LazyFeedbackPage />,
+          },
+          {
+            path: 'feedback/governance',
+            element: <LazyFeedbackGovernancePage />,
+          },
+          {
+            path: 'feedback/:feedbackId',
+            element: <LazyFeedbackDetailPage />,
           },
           {
             path: 'invitations',

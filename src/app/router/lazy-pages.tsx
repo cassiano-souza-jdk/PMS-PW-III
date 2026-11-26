@@ -19,6 +19,9 @@ const ProjectTasksPage = lazy(() => import('./pages/project-tasks-page'));
 const TaskDetailPage = lazy(() => import('./pages/task-detail-page'));
 const FocusPage = lazy(() => import('./pages/focus-page'));
 const BottlenecksPage = lazy(() => import('./pages/bottlenecks-page'));
+const FeedbackPage = lazy(() => import('./pages/feedback-page'));
+const FeedbackDetailPage = lazy(() => import('./pages/feedback-detail-page'));
+const FeedbackGovernancePage = lazy(() => import('./pages/feedback-governance-page'));
 const PermissionsPage = lazy(() => import('./pages/permissions-page'));
 
 export function LazyFoundationHomePage() {
@@ -161,6 +164,30 @@ export function LazyBottlenecksPage() {
   return (
     <RouteSuspense>
       <BottlenecksPage />
+    </RouteSuspense>
+  );
+}
+
+export function LazyFeedbackPage() {
+  return (
+    <RouteSuspense>
+      <FeedbackPage />
+    </RouteSuspense>
+  );
+}
+
+export function LazyFeedbackDetailPage() {
+  return (
+    <RouteSuspense>
+      <FeedbackDetailPage />
+    </RouteSuspense>
+  );
+}
+
+export function LazyFeedbackGovernancePage() {
+  return (
+    <RouteSuspense>
+      <FeedbackGovernancePage />
     </RouteSuspense>
   );
 }
