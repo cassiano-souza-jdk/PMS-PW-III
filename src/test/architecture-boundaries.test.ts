@@ -380,6 +380,133 @@ describe(
       expect(bottleneckDomainTestResult?.messages.filter((msg) => msg.severity === 2)).toEqual([]);
     });
 
+    it('blocks acyclic DAG violations in feedback and projects -> bottlenecks/feedback (ADR-0013 §4)', async () => {
+      const feedbackViolations = await lintSnippet(
+        [
+          "import { SUBTASK_STATUSES } from '@/modules/tasks';",
+          "import { PROJECT_STATUSES } from '@/modules/projects';",
+          "import { BOARD_COLUMN_ROLES } from '@/modules/kanban';",
+          "import { assertNoDependencyCycle } from '@/modules/dependencies';",
+          "import { IMPEDIMENT_CATEGORIES } from '@/modules/impediments';",
+          "import { FOCUS_MODES } from '@/modules/focus';",
+          "import { BOTTLENECK_INDICATORS } from '@/modules/bottlenecks';",
+          "import { ANALYTICS_PERIOD_PRESETS } from '@/modules/analytics';",
+          "import { NOTIFICATION_CATEGORIES } from '@/modules/notifications';",
+          "import { BACKUP_KINDS } from '@/modules/backups';",
+          "import { TeamService } from '@/modules/teams';",
+          "import { INVITATION_STATUSES } from '@/modules/invitations';",
+          "import { DEMO_CREDENTIALS_BY_ROLE } from '@/modules/authentication';",
+          "import { DEMO_SEED_VERSION } from '@/modules/demo';",
+          "import { canSkipOnboardingStep } from '@/modules/onboarding';",
+          "import { normalizeEmail } from '@/modules/users';",
+          'export const forbiddenFeedbackImports = [',
+          '  SUBTASK_STATUSES,',
+          '  PROJECT_STATUSES,',
+          '  BOARD_COLUMN_ROLES,',
+          '  assertNoDependencyCycle,',
+          '  IMPEDIMENT_CATEGORIES,',
+          '  FOCUS_MODES,',
+          '  BOTTLENECK_INDICATORS,',
+          '  ANALYTICS_PERIOD_PRESETS,',
+          '  NOTIFICATION_CATEGORIES,',
+          '  BACKUP_KINDS,',
+          '  TeamService,',
+          '  INVITATION_STATUSES,',
+          '  DEMO_CREDENTIALS_BY_ROLE,',
+          '  DEMO_SEED_VERSION,',
+          '  canSkipOnboardingStep,',
+          '  normalizeEmail,',
+          '];',
+        ].join('\n'),
+        'src/modules/feedback/application/violation-dag.ts',
+      );
+      const projectsPhase08And09Violations = await lintSnippet(
+        [
+          "import { BOTTLENECK_INDICATORS } from '@/modules/bottlenecks';",
+          "import { FEEDBACK_STATUSES } from '@/modules/feedback';",
+          'export const forbiddenProjectsImports = [BOTTLENECK_INDICATORS, FEEDBACK_STATUSES];',
+        ].join('\n'),
+        'src/modules/projects/application/violation-dag-phase09.ts',
+      );
+      const tasksFeedbackViolations = await lintSnippet(
+        [
+          "import { FEEDBACK_STATUSES } from '@/modules/feedback';",
+          'export const forbiddenTasksFeedbackImport = FEEDBACK_STATUSES;',
+        ].join('\n'),
+        'src/modules/tasks/application/violation-dag-feedback.ts',
+      );
+      const dependenciesFeedbackViolations = await lintSnippet(
+        [
+          "import { FEEDBACK_STATUSES } from '@/modules/feedback';",
+          'export const forbiddenDepsFeedbackImport = FEEDBACK_STATUSES;',
+        ].join('\n'),
+        'src/modules/dependencies/application/violation-dag-feedback.ts',
+      );
+      const impedimentsFeedbackViolations = await lintSnippet(
+        [
+          "import { FEEDBACK_STATUSES } from '@/modules/feedback';",
+          'export const forbiddenImpedimentsFeedbackImport = FEEDBACK_STATUSES;',
+        ].join('\n'),
+        'src/modules/impediments/application/violation-dag-feedback.ts',
+      );
+      const focusFeedbackViolations = await lintSnippet(
+        [
+          "import { FEEDBACK_STATUSES } from '@/modules/feedback';",
+          'export const forbiddenFocusFeedbackImport = FEEDBACK_STATUSES;',
+        ].join('\n'),
+        'src/modules/focus/application/violation-dag-feedback.ts',
+      );
+      const bottlenecksFeedbackViolations = await lintSnippet(
+        [
+          "import { FEEDBACK_STATUSES } from '@/modules/feedback';",
+          'export const forbiddenBottlenecksFeedbackImport = FEEDBACK_STATUSES;',
+        ].join('\n'),
+        'src/modules/bottlenecks/application/violation-dag-feedback.ts',
+      );
+      const [feedbackGovernanceTestResult] = await eslint.lintFiles([
+        path.resolve(WORKSPACE_ROOT, 'src/modules/feedback/domain/feedback-governance.test.ts'),
+      ]);
+
+      expect(
+        feedbackViolations.filter(
+          (msg) => msg.ruleId === 'boundaries/dependencies' && msg.severity === 2,
+        ),
+      ).toHaveLength(16);
+      expect(
+        projectsPhase08And09Violations.filter(
+          (msg) => msg.ruleId === 'boundaries/dependencies' && msg.severity === 2,
+        ),
+      ).toHaveLength(2);
+      expect(
+        tasksFeedbackViolations.filter(
+          (msg) => msg.ruleId === 'boundaries/dependencies' && msg.severity === 2,
+        ),
+      ).toHaveLength(1);
+      expect(
+        dependenciesFeedbackViolations.filter(
+          (msg) => msg.ruleId === 'boundaries/dependencies' && msg.severity === 2,
+        ),
+      ).toHaveLength(1);
+      expect(
+        impedimentsFeedbackViolations.filter(
+          (msg) => msg.ruleId === 'boundaries/dependencies' && msg.severity === 2,
+        ),
+      ).toHaveLength(1);
+      expect(
+        focusFeedbackViolations.filter(
+          (msg) => msg.ruleId === 'boundaries/dependencies' && msg.severity === 2,
+        ),
+      ).toHaveLength(1);
+      expect(
+        bottlenecksFeedbackViolations.filter(
+          (msg) => msg.ruleId === 'boundaries/dependencies' && msg.severity === 2,
+        ),
+      ).toHaveLength(1);
+      expect(feedbackGovernanceTestResult?.messages.filter((msg) => msg.severity === 2)).toEqual(
+        [],
+      );
+    });
+
     it('blocks circular dependencies between real files (import-x/no-cycle)', async () => {
       const [result] = await eslint.lintFiles([path.join(TMP_ALPHA_DIR, 'domain', 'cycle-a.ts')]);
       if (!result) {

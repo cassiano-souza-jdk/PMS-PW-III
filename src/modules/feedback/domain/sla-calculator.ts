@@ -1,15 +1,12 @@
 import { ValidationError } from '@/shared/errors';
 import { parseIsoDateTimeMs, type IsoDate, type IsoDateTime } from '@/shared/kernel';
-import type { FeedbackSlaSnapshot } from './feedback';
+import type { FeedbackSlaSnapshot, SlaPauseInterval } from './feedback';
+
+export type { SlaPauseInterval } from './feedback';
 
 export type SlaCalculationTarget = 'FIRST_RESPONSE' | 'RESOLUTION';
 
 export type SlaEvaluationStatus = 'ON_TRACK' | 'WARNING' | 'BREACHED';
-
-export interface SlaPauseInterval {
-  readonly startedAt: IsoDateTime;
-  readonly endedAt?: IsoDateTime;
-}
 
 export interface SlaElapsedInput {
   readonly target: SlaCalculationTarget;

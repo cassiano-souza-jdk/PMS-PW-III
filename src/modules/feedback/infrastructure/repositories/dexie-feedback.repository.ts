@@ -30,6 +30,7 @@ import type {
   FeedbackSlaSnapshotRepositoryPort,
 } from '../../application/ports/feedback-repository.port';
 import type {
+  ContestStatus,
   Feedback,
   FeedbackAttachment,
   FeedbackCategory,
@@ -54,6 +55,8 @@ import type {
   FeedbackReopenRequestId,
   FeedbackSlaSnapshot,
   FeedbackSlaSnapshotId,
+  FeedbackStatus,
+  ReopenRequestStatus,
 } from '../../domain/feedback';
 
 export class DexieFeedbackRepository implements FeedbackRepositoryPort {
@@ -76,6 +79,7 @@ export class DexieFeedbackRepository implements FeedbackRepositoryPort {
     filters?: {
       readonly authorUserId?: UserId;
       readonly assigneeId?: UserId;
+      readonly status?: FeedbackStatus;
     },
   ): Promise<readonly Feedback[]> {
     return withPersistenceErrorHandling('Feedback.listByOrganization', async () => {
@@ -91,12 +95,24 @@ export class DexieFeedbackRepository implements FeedbackRepositoryPort {
           .where('[organizationId+assigneeId]')
           .equals([organizationId, filters.assigneeId])
           .toArray();
+      } else if (filters?.status !== undefined) {
+        records = await this.table
+          .where('[organizationId+status]')
+          .equals([organizationId, filters.status])
+          .toArray();
       } else {
         records = await this.table.where('organizationId').equals(organizationId).toArray();
       }
 
       if (filters?.authorUserId !== undefined && filters?.assigneeId !== undefined) {
         records = records.filter((item) => item.assigneeId === filters.assigneeId);
+      }
+
+      if (
+        filters?.status !== undefined &&
+        (filters?.authorUserId !== undefined || filters?.assigneeId !== undefined)
+      ) {
+        records = records.filter((item) => item.status === filters.status);
       }
 
       return records.sort(
@@ -177,6 +193,28 @@ export class DexieFeedbackCategoryRepository implements FeedbackCategoryReposito
       organizationId,
       categoryId,
       'FeedbackCategory',
+    );
+  }
+
+  async findByCode(organizationId: OrganizationId, code: string): Promise<FeedbackCategory | null> {
+    return withPersistenceErrorHandling('FeedbackCategory.findByCode', async () => {
+      const record = await this.categoryTable
+        .where('[organizationId+code]')
+        .equals([organizationId, code])
+        .first();
+      return record ?? null;
+    });
+  }
+
+  async findVersionById(
+    organizationId: OrganizationId,
+    versionId: FeedbackCategoryVersionId,
+  ): Promise<FeedbackCategoryVersion | null> {
+    return findOrganizationScopedById(
+      this.versionTable,
+      organizationId,
+      versionId,
+      'FeedbackCategoryVersion',
     );
   }
 
@@ -435,6 +473,45 @@ export class DexieFeedbackContestRepository implements FeedbackContestRepository
     });
   }
 
+  async listByCycle(
+    organizationId: OrganizationId,
+    cycleId: FeedbackCycleId,
+  ): Promise<readonly FeedbackContest[]> {
+    return withPersistenceErrorHandling('FeedbackContest.listByCycle', async () => {
+      const records = await this.contestTable
+        .where('[organizationId+cycleId]')
+        .equals([organizationId, cycleId])
+        .toArray();
+
+      return records.sort(
+        (a, b) =>
+          parseIsoDateTimeMs(a.openedAt) - parseIsoDateTimeMs(b.openedAt) ||
+          a.id.localeCompare(b.id),
+      );
+    });
+  }
+
+  async listByOrganization(
+    organizationId: OrganizationId,
+    filters?: { readonly status?: ContestStatus },
+  ): Promise<readonly FeedbackContest[]> {
+    return withPersistenceErrorHandling('FeedbackContest.listByOrganization', async () => {
+      const records =
+        filters?.status !== undefined
+          ? await this.contestTable
+              .where('[organizationId+status]')
+              .equals([organizationId, filters.status])
+              .toArray()
+          : await this.contestTable.where('organizationId').equals(organizationId).toArray();
+
+      return records.sort(
+        (a, b) =>
+          parseIsoDateTimeMs(a.openedAt) - parseIsoDateTimeMs(b.openedAt) ||
+          a.id.localeCompare(b.id),
+      );
+    });
+  }
+
   async listAnalyses(
     organizationId: OrganizationId,
     contestId: FeedbackContestId,
@@ -515,9 +592,34 @@ export class DexieFeedbackContestReasonRepository implements FeedbackContestReas
     );
   }
 
+  async findByCode(
+    organizationId: OrganizationId,
+    code: string,
+  ): Promise<FeedbackContestReason | null> {
+    return withPersistenceErrorHandling('FeedbackContestReason.findByCode', async () => {
+      const record = await this.reasonTable
+        .where('[organizationId+code]')
+        .equals([organizationId, code])
+        .first();
+      return record ?? null;
+    });
+  }
+
+  async findVersionById(
+    organizationId: OrganizationId,
+    versionId: FeedbackContestReasonVersionId,
+  ): Promise<FeedbackContestReasonVersion | null> {
+    return findOrganizationScopedById(
+      this.versionTable,
+      organizationId,
+      versionId,
+      'FeedbackContestReasonVersion',
+    );
+  }
+
   async listByOrganization(
     organizationId: OrganizationId,
-    options?: { readonly includeInactive?: boolean },
+    options?: { readonly includeInactive?: boolean; readonly includeDeleted?: boolean },
   ): Promise<readonly FeedbackContestReason[]> {
     return withPersistenceErrorHandling('FeedbackContestReason.listByOrganization', async () => {
       const records = await this.reasonTable
@@ -525,8 +627,11 @@ export class DexieFeedbackContestReasonRepository implements FeedbackContestReas
         .equals(organizationId)
         .toArray();
 
+      const afterSoftDelete = filterSoftDeleted(records, options?.includeDeleted);
       const filtered =
-        options?.includeInactive === true ? records : records.filter((reason) => reason.active);
+        options?.includeInactive === true
+          ? afterSoftDelete
+          : afterSoftDelete.filter((reason) => reason.active);
 
       return filtered.sort((a, b) => a.sortOrder - b.sortOrder || a.code.localeCompare(b.code));
     });
@@ -617,6 +722,19 @@ export class DexieFeedbackSlaSnapshotRepository implements FeedbackSlaSnapshotRe
     );
   }
 
+  async findByCycleId(
+    organizationId: OrganizationId,
+    cycleId: FeedbackCycleId,
+  ): Promise<FeedbackSlaSnapshot | null> {
+    return withPersistenceErrorHandling('FeedbackSlaSnapshot.findByCycleId', async () => {
+      const record = await this.table
+        .where('[organizationId+cycleId]')
+        .equals([organizationId, cycleId])
+        .first();
+      return record ?? null;
+    });
+  }
+
   async listByFeedback(
     organizationId: OrganizationId,
     feedbackId: FeedbackId,
@@ -692,6 +810,27 @@ export class DexieFeedbackReopenRequestRepository implements FeedbackReopenReque
         .where('[organizationId+feedbackId]')
         .equals([organizationId, feedbackId])
         .toArray();
+
+      return records.sort(
+        (a, b) =>
+          parseIsoDateTimeMs(a.requestedAt) - parseIsoDateTimeMs(b.requestedAt) ||
+          a.id.localeCompare(b.id),
+      );
+    });
+  }
+
+  async listByOrganization(
+    organizationId: OrganizationId,
+    filters?: { readonly status?: ReopenRequestStatus },
+  ): Promise<readonly FeedbackReopenRequest[]> {
+    return withPersistenceErrorHandling('FeedbackReopenRequest.listByOrganization', async () => {
+      const records =
+        filters?.status !== undefined
+          ? await this.table
+              .where('[organizationId+status]')
+              .equals([organizationId, filters.status])
+              .toArray()
+          : await this.table.where('organizationId').equals(organizationId).toArray();
 
       return records.sort(
         (a, b) =>

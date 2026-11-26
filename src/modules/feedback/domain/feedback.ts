@@ -183,6 +183,46 @@ export const INITIAL_CONTEST_REASONS = {
 export type InitialContestReasonCode =
   (typeof INITIAL_CONTEST_REASONS)[keyof typeof INITIAL_CONTEST_REASONS];
 
+/**
+ * Canonical target module keys selectable during feedback registration without
+ * importing business modules (preserving the acyclic DAG — ADR-0013 §1 DN-08).
+ */
+export const FEEDBACK_MODULE_KEYS = Object.freeze([
+  'general',
+  'authentication',
+  'users',
+  'organizations',
+  'invitations',
+  'teams',
+  'projects',
+  'kanban',
+  'tasks',
+  'dependencies',
+  'impediments',
+  'focus',
+  'analytics',
+  'bottlenecks',
+  'feedback',
+  'notifications',
+  'audit',
+  'reports',
+  'search',
+  'trash',
+  'backups',
+  'settings',
+  'onboarding',
+  'help',
+  'monitoring',
+  'demo',
+] as const);
+
+export type FeedbackModuleKey = (typeof FEEDBACK_MODULE_KEYS)[number];
+
+export interface SlaPauseInterval {
+  readonly startedAt: IsoDateTime;
+  readonly endedAt?: IsoDateTime;
+}
+
 export type SlaCalendarMode = 'CONTINUOUS' | 'BUSINESS_HOURS';
 
 export interface SlaBreakIntervalUtc {
@@ -244,6 +284,12 @@ export interface FeedbackCycle extends OrganizationScoped {
   readonly closedAt?: IsoDateTime;
   readonly closureReason?: FeedbackClosureReason;
   readonly authorConfirmedResolution: boolean;
+  readonly waitingInfoPauses?: readonly SlaPauseInterval[];
+  readonly firstResponseWarningAt?: IsoDateTime;
+  readonly firstResponseBreachedAt?: IsoDateTime;
+  readonly resolutionWarningAt?: IsoDateTime;
+  readonly resolutionBreachedAt?: IsoDateTime;
+  readonly escalatedAt?: IsoDateTime;
 }
 
 export interface FeedbackCategory extends OrganizationScoped, AuditableTimestamps, SoftDeletable {
@@ -297,7 +343,8 @@ export interface FeedbackAttachment extends AttachmentDescriptor {
   readonly internalNoteId?: FeedbackInternalNoteId;
 }
 
-export interface FeedbackContestReason extends OrganizationScoped, AuditableTimestamps {
+export interface FeedbackContestReason
+  extends OrganizationScoped, AuditableTimestamps, SoftDeletable {
   readonly id: FeedbackContestReasonId;
   readonly code: string;
   readonly currentVersionId: FeedbackContestReasonVersionId;
