@@ -255,7 +255,25 @@ export function FeedbackPage() {
 
   const canCreateFeedback = can(PERMISSION_CODES.FEEDBACK_CREATE, orgResource, policyConfig);
   const canEvaluateSla = can(PERMISSION_CODES.FEEDBACK_SLA_MANAGE, orgResource, policyConfig);
-  const canExportFeedbacks = can(PERMISSION_CODES.FEEDBACK_EXPORT, orgResource, policyConfig);
+  const canExportFeedbacks =
+    can(PERMISSION_CODES.FEEDBACK_EXPORT, orgResource, policyConfig) ||
+    listResult.items.some((item) =>
+      can(
+        PERMISSION_CODES.FEEDBACK_EXPORT,
+        {
+          kind: 'FEEDBACK',
+          id: asEntityId(item.feedback.id),
+          exists: true,
+          organizationId: activeOrganization.id,
+          feedbackId: item.feedback.id,
+          createdBy: item.feedback.authorUserId,
+          ...(item.feedback.assigneeId !== undefined
+            ? { assigneeId: item.feedback.assigneeId }
+            : {}),
+        },
+        policyConfig,
+      ),
+    );
   const canAccessGovernance =
     activeOrganization.role === 'ADMIN' &&
     can(PERMISSION_CODES.FEEDBACK_CATALOG_MANAGE, orgResource, policyConfig);
