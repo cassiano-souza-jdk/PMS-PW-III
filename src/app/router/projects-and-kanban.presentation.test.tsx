@@ -125,6 +125,11 @@ describe('Projects, Participants & Kanban Presentation + Routing + Accessibility
         expect(
           within(primaryNav).getByRole('link', { name: ptBRMessages['nav.bottlenecks'] }),
         ).toHaveAttribute('href', '/bottlenecks');
+        const feedbackNavLink = within(primaryNav).getByRole('link', {
+          name: ptBRMessages['nav.feedback'],
+        });
+        expect(feedbackNavLink).toHaveAttribute('href', '/feedback');
+        expect(feedbackNavLink).toHaveClass('min-h-[44px]');
 
         // 1. Navega para /projects
         await user.click(
@@ -913,6 +918,11 @@ describe('Projects, Participants & Kanban Presentation + Routing + Accessibility
       expect(
         within(primaryNav).getByRole('link', { name: ptBRMessages['nav.bottlenecks'] }),
       ).toHaveAttribute('href', '/bottlenecks');
+      const memberFeedbackNavLink = within(primaryNav).getByRole('link', {
+        name: ptBRMessages['nav.feedback'],
+      });
+      expect(memberFeedbackNavLink).toHaveAttribute('href', '/feedback');
+      expect(memberFeedbackNavLink).toHaveClass('min-h-[44px]');
 
       await user.click(
         within(primaryNav).getByRole('link', { name: ptBRMessages['nav.projects'] }),
