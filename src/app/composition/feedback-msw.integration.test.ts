@@ -15,10 +15,13 @@ import {
   type DecideExceptionalReopenResult,
   type EvaluateFeedbackSlasResult,
   type Feedback,
+  type FeedbackActorProfile,
   type FeedbackAttachment,
+  type FeedbackCategory,
   type FeedbackCategoryWithVersion,
   type FeedbackContest,
   type FeedbackContestAnalysis,
+  type FeedbackContestReason,
   type FeedbackContestReasonWithVersion,
   type FeedbackDetail,
   type FeedbackExportResult,
@@ -36,6 +39,7 @@ import {
 } from '@/shared/errors';
 import {
   PRIORITIES,
+  asCorrelationId,
   asEntityId,
   asIsoDate,
   asIsoDateTime,
@@ -1080,5 +1084,240 @@ describe('Phase 09 — FeedbackService, Anti-Cycle Adapter, Dexie Complements & 
       (g) => g.id === manualViewGrant.id,
     );
     expect(manualAfterDecision?.status).toBe(GRANT_STATUSES.ACTIVE);
+  });
+
+  it('covers remaining §12 HTTP endpoints (assignable-handlers, GET settings/feedback-sla, catalog reorder & contest-reason CRUD, query filters, binary Base64<->Uint8Array roundtrip, invalid Base64/charset MIME 422, correlationId propagation, and persisted cross-org 403 isolation)', async () => {
+    await seedAdditionalMembers();
+    const correlationId = asCorrelationId('77777777-7777-4777-8777-777777777701');
+    const emittedEvents: DomainEventEnvelope[] = [];
+    container.eventBus.subscribe((evt) => {
+      emittedEvents.push(evt);
+    });
+
+    // 1. GET assignable-handlers (ADMIN 200 vs MEMBER/MANAGER 403)
+    await expect(
+      container.httpClient.get<readonly FeedbackActorProfile[]>(
+        `/organizations/${DEMO_ORG_ID}/feedbacks/assignable-handlers`,
+        { actorUserId: DEMO_MEMBER_USER_ID },
+      ),
+    ).rejects.toThrow(AuthorizationError);
+
+    const handlers = await container.httpClient.get<readonly FeedbackActorProfile[]>(
+      `/organizations/${DEMO_ORG_ID}/feedbacks/assignable-handlers`,
+      { actorUserId: DEMO_ADMIN_USER_ID },
+    );
+    expect(handlers.some((h) => h.userId === DEMO_ADMIN_USER_ID)).toBe(true);
+    expect(handlers.some((h) => h.userId === DEMO_MANAGER_USER_ID)).toBe(true);
+    expect(handlers.some((h) => h.userId === DEMO_MEMBER_USER_ID)).toBe(false);
+
+    // 2. GET settings/feedback-sla (ADMIN 200 vs MANAGER 403)
+    await expect(
+      container.httpClient.get<FeedbackSlaSettingsView>(
+        `/organizations/${DEMO_ORG_ID}/settings/feedback-sla`,
+        { actorUserId: DEMO_MANAGER_USER_ID },
+      ),
+    ).rejects.toThrow(AuthorizationError);
+
+    const slaSettings = await container.httpClient.get<FeedbackSlaSettingsView>(
+      `/organizations/${DEMO_ORG_ID}/settings/feedback-sla`,
+      { actorUserId: DEMO_ADMIN_USER_ID },
+    );
+    expect(slaSettings.organizationId).toBe(DEMO_ORG_ID);
+
+    // 3. Categories ?includeInactive=true & reorder
+    await expect(
+      container.httpClient.get<readonly FeedbackCategoryWithVersion[]>(
+        `/organizations/${DEMO_ORG_ID}/feedback-categories?includeInactive=true`,
+        { actorUserId: DEMO_MEMBER_USER_ID },
+      ),
+    ).rejects.toThrow(AuthorizationError);
+
+    const allCats = await container.httpClient.get<readonly FeedbackCategoryWithVersion[]>(
+      `/organizations/${DEMO_ORG_ID}/feedback-categories?includeInactive=true`,
+      { actorUserId: DEMO_ADMIN_USER_ID },
+    );
+    const reversedCatIds = [...allCats].reverse().map((item) => item.category.id);
+    const reorderedCats = await container.httpClient.post<readonly FeedbackCategory[]>(
+      `/organizations/${DEMO_ORG_ID}/feedback-categories/reorder`,
+      { orderedIds: reversedCatIds },
+      { actorUserId: DEMO_ADMIN_USER_ID },
+    );
+    expect(reorderedCats.map((c) => c.id)).toEqual(reversedCatIds);
+
+    await expect(
+      container.httpClient.post(
+        `/organizations/${DEMO_ORG_ID}/feedback-categories/reorder`,
+        { orderedIds: reversedCatIds.slice(0, 1) },
+        { actorUserId: DEMO_ADMIN_USER_ID },
+      ),
+    ).rejects.toThrow(ValidationError);
+
+    // 4. Contest Reasons CRUD + ?includeInactive=true + reorder + soft-delete unused
+    await expect(
+      container.httpClient.get<readonly FeedbackContestReasonWithVersion[]>(
+        `/organizations/${DEMO_ORG_ID}/feedback-contest-reasons?includeInactive=true`,
+        { actorUserId: DEMO_MEMBER_USER_ID },
+      ),
+    ).rejects.toThrow(AuthorizationError);
+
+    const createdReason = await container.httpClient.post<FeedbackContestReasonWithVersion>(
+      `/organizations/${DEMO_ORG_ID}/feedback-contest-reasons`,
+      { code: 'NEW_EVIDENCE_E2E', name: 'Nova evidência técnica', active: true },
+      { actorUserId: DEMO_ADMIN_USER_ID },
+    );
+    const updatedReason = await container.httpClient.patch<FeedbackContestReasonWithVersion>(
+      `/organizations/${DEMO_ORG_ID}/feedback-contest-reasons/${createdReason.reason.id}`,
+      { name: 'Nova evidência técnica v2', active: false },
+      { actorUserId: DEMO_ADMIN_USER_ID },
+    );
+    expect(updatedReason.currentVersion.versionNumber).toBe(2);
+    expect(updatedReason.reason.active).toBe(false);
+
+    const allReasons = await container.httpClient.get<readonly FeedbackContestReasonWithVersion[]>(
+      `/organizations/${DEMO_ORG_ID}/feedback-contest-reasons?includeInactive=true`,
+      { actorUserId: DEMO_ADMIN_USER_ID },
+    );
+    const reversedReasonIds = [...allReasons].reverse().map((r) => r.reason.id);
+    const reorderedReasons = await container.httpClient.post<readonly FeedbackContestReason[]>(
+      `/organizations/${DEMO_ORG_ID}/feedback-contest-reasons/reorder`,
+      { orderedIds: reversedReasonIds },
+      { actorUserId: DEMO_ADMIN_USER_ID },
+    );
+    expect(reorderedReasons.map((r) => r.id)).toEqual(reversedReasonIds);
+
+    const softDeletedReason = await container.httpClient.delete<FeedbackContestReason>(
+      `/organizations/${DEMO_ORG_ID}/feedback-contest-reasons/${createdReason.reason.id}`,
+      { actorUserId: DEMO_ADMIN_USER_ID },
+    );
+    expect(softDeletedReason.deletedAt).toBe(currentNow);
+
+    // 5. Binary Base64 <-> Uint8Array attachment roundtrip + invalid Base64 & charset MIME 422 + messageId link
+    const messageResult = await container.httpClient.post<AddFeedbackMessageResult>(
+      `/organizations/${DEMO_ORG_ID}/feedbacks/${DEMO_FEEDBACK_IDS.IN_PROGRESS_BUG}/messages`,
+      { body: 'Mensagem vinculada ao anexo binário PNG.' },
+      { actorUserId: DEMO_MEMBER_USER_ID, correlationId },
+    );
+    expect(
+      emittedEvents.some(
+        (evt) =>
+          evt.eventType === 'feedback.message.created' && evt.correlationId === correlationId,
+      ),
+    ).toBe(true);
+
+    const pngHeaderBytes = new Uint8Array([
+      0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0xff,
+    ]);
+    const pngBase64 = Buffer.from(pngHeaderBytes).toString('base64');
+
+    const uploadedBin = await container.httpClient.post<FeedbackAttachment>(
+      `/organizations/${DEMO_ORG_ID}/feedbacks/${DEMO_FEEDBACK_IDS.IN_PROGRESS_BUG}/attachments`,
+      {
+        fileName: 'captura.png',
+        mimeType: 'image/png',
+        contentBase64: pngBase64,
+        messageId: messageResult.message.id,
+      },
+      { actorUserId: DEMO_MEMBER_USER_ID },
+    );
+    expect(uploadedBin.messageId).toBe(messageResult.message.id);
+
+    const downloadedBin = await container.httpClient.get<{
+      readonly attachment: FeedbackAttachment;
+      readonly mimeType: string;
+      readonly contentBase64: string;
+    }>(
+      `/organizations/${DEMO_ORG_ID}/feedbacks/${DEMO_FEEDBACK_IDS.IN_PROGRESS_BUG}/attachments/${uploadedBin.id}/download`,
+      { actorUserId: DEMO_MEMBER_USER_ID },
+    );
+    expect(downloadedBin.mimeType).toBe('image/png');
+    expect(new Uint8Array(Buffer.from(downloadedBin.contentBase64, 'base64'))).toEqual(
+      pngHeaderBytes,
+    );
+
+    await expect(
+      container.httpClient.post(
+        `/organizations/${DEMO_ORG_ID}/feedbacks/${DEMO_FEEDBACK_IDS.IN_PROGRESS_BUG}/attachments`,
+        {
+          fileName: 'invalido.txt',
+          mimeType: 'text/plain',
+          contentBase64: '!!!not-valid-base64!!!',
+        },
+        { actorUserId: DEMO_MEMBER_USER_ID },
+      ),
+    ).rejects.toThrow(ValidationError);
+
+    await expect(
+      container.httpClient.post(
+        `/organizations/${DEMO_ORG_ID}/feedbacks/${DEMO_FEEDBACK_IDS.IN_PROGRESS_BUG}/attachments`,
+        {
+          fileName: 'payload.html',
+          mimeType: 'text/html; charset=utf-8',
+          contentBase64: toBase64('<script>alert(1)</script>'),
+        },
+        { actorUserId: DEMO_MEMBER_USER_ID },
+      ),
+    ).rejects.toThrow(ValidationError);
+
+    // 6. List query filters & single-feedback export filter
+    const filteredList = await container.httpClient.get<FeedbackListResult>(
+      `/organizations/${DEMO_ORG_ID}/feedbacks?status=IN_PROGRESS&moduleKey=kanban&priority=HIGH&search=WIP&page=1&pageSize=1`,
+      { actorUserId: DEMO_ADMIN_USER_ID },
+    );
+    expect(filteredList.totalCount).toBe(1);
+    expect(filteredList.items[0]?.feedback.id).toBe(DEMO_FEEDBACK_IDS.IN_PROGRESS_BUG);
+
+    const singleExport = await container.httpClient.get<FeedbackExportResult>(
+      `/organizations/${DEMO_ORG_ID}/feedbacks/export?format=JSON&feedbackId=${DEMO_FEEDBACK_IDS.IN_PROGRESS_BUG}`,
+      { actorUserId: DEMO_MEMBER_USER_ID },
+    );
+    expect(singleExport.totalCount).toBe(1);
+    expect(singleExport.items[0]?.feedback.id).toBe(DEMO_FEEDBACK_IDS.IN_PROGRESS_BUG);
+    expect(singleExport.items[0]?.internalNotes).toEqual([]);
+
+    // 7. Persisted second organization Org B -> strict 403 AuthorizationError cross-org isolation
+    const { organization: orgB } = await container.services.organizations.createOrganization(
+      SECOND_MANAGER_ID,
+      { name: 'Second Org B', slug: 'second-org-b' },
+    );
+    const orgBCat = await container.services.feedback.createFeedbackCategory(
+      SECOND_MANAGER_ID,
+      orgB.id,
+      { code: 'ORG_B_ONLY', name: 'Org B Only' },
+    );
+
+    await expect(
+      container.httpClient.get(`/organizations/${orgB.id}/feedbacks`, {
+        actorUserId: DEMO_ADMIN_USER_ID,
+      }),
+    ).rejects.toThrow(AuthorizationError);
+    await expect(
+      container.httpClient.post(
+        `/organizations/${orgB.id}/feedbacks`,
+        {
+          moduleKey: 'general',
+          categoryId: orgBCat.category.id,
+          title: 'Cross org attempt',
+          description: 'Tentativa cross-org via MSW.',
+        },
+        { actorUserId: DEMO_ADMIN_USER_ID },
+      ),
+    ).rejects.toThrow(AuthorizationError);
+    await expect(
+      container.httpClient.get(`/organizations/${orgB.id}/settings/feedback-sla`, {
+        actorUserId: DEMO_ADMIN_USER_ID,
+      }),
+    ).rejects.toThrow(AuthorizationError);
+    await expect(
+      container.httpClient.post(
+        `/organizations/${orgB.id}/feedbacks/evaluate-sla`,
+        {},
+        { actorUserId: DEMO_ADMIN_USER_ID },
+      ),
+    ).rejects.toThrow(AuthorizationError);
+    await expect(
+      container.httpClient.get(`/organizations/${orgB.id}/feedbacks/export?format=JSON`, {
+        actorUserId: DEMO_ADMIN_USER_ID,
+      }),
+    ).rejects.toThrow(AuthorizationError);
   });
 });
