@@ -21,7 +21,7 @@ import {
 } from '@/app/providers';
 import { PERMISSION_CODES } from '@/modules/authorization';
 import type { MessageId } from '@/shared/i18n';
-import type { OrganizationRole } from '@/shared/kernel';
+import { asProjectId, asTeamId, type OrganizationRole } from '@/shared/kernel';
 import { Badge, Button, cn } from '@/shared/ui';
 
 interface ThemeOption {
@@ -64,7 +64,7 @@ export function AppShell() {
     isDemoOrganization,
     selectOrganization,
   } = useOrganization();
-  const { can } = usePermission();
+  const { activeGrants, can, scopeSummary } = usePermission();
 
   const canViewOrganizationSettings = isAuthenticated && can(PERMISSION_CODES.ORGANIZATION_VIEW);
   const canViewFocus =
@@ -98,6 +98,91 @@ export function AppShell() {
         assigneeId: user.id,
       }) ||
       can(PERMISSION_CODES.FEEDBACK_VIEW));
+  const canViewAnalytics =
+    isAuthenticated &&
+    user !== null &&
+    activeOrganization !== null &&
+    (can(PERMISSION_CODES.ANALYTICS_PERSONAL_VIEW, {
+      kind: 'ANALYTICS',
+      ownerUserId: user.id,
+    }) ||
+      can(PERMISSION_CODES.ANALYTICS_ORGANIZATION_VIEW, {
+        kind: 'ANALYTICS',
+      }) ||
+      scopeSummary.managedProjectIds.some((projectId) =>
+        can(PERMISSION_CODES.ANALYTICS_PROJECT_VIEW, {
+          kind: 'ANALYTICS',
+          projectId,
+          includesThirdPartyIndividualMetrics: false,
+        }),
+      ) ||
+      scopeSummary.participatedProjectIds.some((projectId) =>
+        can(PERMISSION_CODES.ANALYTICS_PROJECT_VIEW, {
+          kind: 'ANALYTICS',
+          projectId,
+          includesThirdPartyIndividualMetrics: false,
+        }),
+      ) ||
+      activeGrants.some(
+        (grant) =>
+          grant.permission === PERMISSION_CODES.ANALYTICS_PROJECT_VIEW &&
+          grant.scopeType === 'PROJECT' &&
+          grant.scopeId !== undefined &&
+          can(PERMISSION_CODES.ANALYTICS_PROJECT_VIEW, {
+            kind: 'ANALYTICS',
+            projectId: asProjectId(grant.scopeId),
+            includesThirdPartyIndividualMetrics: false,
+          }),
+      ) ||
+      can(PERMISSION_CODES.ANALYTICS_PROJECT_VIEW, {
+        kind: 'ANALYTICS',
+        includesThirdPartyIndividualMetrics: false,
+      }));
+  const canViewReports =
+    isAuthenticated &&
+    user !== null &&
+    activeOrganization !== null &&
+    (can(PERMISSION_CODES.REPORT_VIEW, {
+      kind: 'REPORT',
+    }) ||
+      scopeSummary.managedProjectIds.some((projectId) =>
+        can(PERMISSION_CODES.REPORT_VIEW, {
+          kind: 'REPORT',
+          projectId,
+        }),
+      ) ||
+      scopeSummary.participatedProjectIds.some((projectId) =>
+        can(PERMISSION_CODES.REPORT_VIEW, {
+          kind: 'REPORT',
+          projectId,
+        }),
+      ) ||
+      scopeSummary.managedTeamIds.some((teamId) =>
+        can(PERMISSION_CODES.REPORT_VIEW, {
+          kind: 'REPORT',
+          teamId,
+        }),
+      ) ||
+      activeGrants.some((grant) => {
+        if (grant.permission !== PERMISSION_CODES.REPORT_VIEW) {
+          return false;
+        }
+        if (grant.scopeType === 'PROJECT' && grant.scopeId !== undefined) {
+          return can(PERMISSION_CODES.REPORT_VIEW, {
+            kind: 'REPORT',
+            projectId: asProjectId(grant.scopeId),
+          });
+        }
+        if (grant.scopeType === 'TEAM' && grant.scopeId !== undefined) {
+          return can(PERMISSION_CODES.REPORT_VIEW, {
+            kind: 'REPORT',
+            teamId: asTeamId(grant.scopeId),
+          });
+        }
+        return can(PERMISSION_CODES.REPORT_VIEW, {
+          kind: 'REPORT',
+        });
+      }));
 
   const handleOrganizationChange = (event: ChangeEvent<HTMLSelectElement>) => {
     const selected = organizations.find((org) => org.id === event.target.value);
@@ -226,6 +311,20 @@ export function AppShell() {
                       <li>
                         <NavLink to="/feedback" className={navLinkClassName}>
                           {intl.formatMessage({ id: 'nav.feedback' })}
+                        </NavLink>
+                      </li>
+                    ) : null}
+                    {canViewAnalytics ? (
+                      <li>
+                        <NavLink to="/analytics" className={navLinkClassName}>
+                          {intl.formatMessage({ id: 'nav.analytics' })}
+                        </NavLink>
+                      </li>
+                    ) : null}
+                    {canViewReports ? (
+                      <li>
+                        <NavLink to="/reports" className={navLinkClassName}>
+                          {intl.formatMessage({ id: 'nav.reports' })}
                         </NavLink>
                       </li>
                     ) : null}

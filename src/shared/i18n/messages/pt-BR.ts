@@ -13,6 +13,8 @@ export const ptBRMessages = {
   'nav.focus': 'Modo Foco',
   'nav.bottlenecks': 'Gargalos',
   'nav.feedback': 'Feedbacks',
+  'nav.analytics': 'Analytics e Dashboards',
+  'nav.reports': 'Relatórios',
   'nav.invitations': 'Convites',
   'nav.permissions': 'Permissões',
   'nav.profile': 'Perfil',
@@ -401,6 +403,7 @@ export const ptBRMessages = {
   'projects.openBoardAction': 'Abrir quadro Kanban',
   'projects.openTasksAction': 'Lista de tarefas',
   'projects.openBottlenecksAction': 'Gargalos do projeto',
+  'projects.openAnalyticsAction': 'Ver analytics do projeto',
   'projects.archivedBanner':
     'Este projeto está arquivado e permanece bloqueado para alterações operacionais.',
   'projects.create.title': 'Criar novo projeto',
@@ -469,6 +472,7 @@ export const ptBRMessages = {
   'kanban.backToProjects': 'Voltar para projetos',
   'kanban.openTaskListAction': 'Lista de tarefas',
   'kanban.openBottlenecksAction': 'Gargalos do projeto',
+  'kanban.openAnalyticsAction': 'Ver analytics do projeto',
   'kanban.archivedLockBanner':
     'Este projeto está arquivado. Movimentações, criação de cartões e alterações estruturais estão bloqueadas.',
   'kanban.emptyBoard': 'Nenhuma coluna configurada neste quadro.',
@@ -1593,6 +1597,327 @@ export const ptBRMessages = {
   'common.edit': 'Editar',
   'common.delete': 'Excluir',
   'common.loading': 'Carregando...',
+
+  'analytics.title': 'Analytics e Dashboards',
+  'analytics.pageTitle': 'Analytics e Dashboards | PMS',
+  'analytics.subtitle':
+    'Acompanhe indicadores oficiais de fluxo, feedbacks e SLA, carga ponderada, gargalos e personalize seus widgets por escopo.',
+  'analytics.projectPage.title': 'Analytics do projeto — {name}',
+  'analytics.projectPage.pageTitle': 'Analytics — {name} | PMS',
+  'analytics.projectPage.subtitle':
+    'Métricas oficiais de entrega, impedimentos, gargalos e feedbacks no escopo do projeto selecionado.',
+  'analytics.backToProjects': 'Voltar para projetos',
+  'analytics.openBoardAction': 'Abrir quadro Kanban',
+  'analytics.openTasksAction': 'Lista de tarefas',
+  'analytics.openBottlenecksAction': 'Gargalos do projeto',
+  'analytics.openReportsAction': 'Abrir relatórios',
+  'analytics.liveRegionLabel': 'Atualizações de Analytics e Dashboards',
+  'analytics.demoIsolationNotice':
+    'Ambiente demonstrativo isolado: preferências de dashboard e indicadores desta organização permanecem separados das suas organizações reais.',
+  'analytics.emptyOrgTitle': 'Nenhuma organização ativa',
+  'analytics.emptyOrgDescription':
+    'Selecione ou crie uma organização para consultar indicadores de Analytics e personalizar dashboards.',
+  'analytics.noPermission':
+    'Seu perfil atual não possui permissão para visualizar este escopo de Analytics.',
+
+  'analytics.tabs.label': 'Seções de Analytics e Governança',
+  'analytics.tabs.overview': 'Visão geral e widgets',
+  'analytics.tabs.flow': 'Fluxo e entregas',
+  'analytics.tabs.feedback': 'Feedbacks e SLA',
+  'analytics.tabs.workloadBottlenecks': 'Carga e gargalos',
+  'analytics.tabs.calibration': 'Calibração (ADMIN)',
+
+  'analytics.scope.label': 'Escopo da análise',
+  'analytics.scope.PERSONAL': 'Pessoal',
+  'analytics.scope.PROJECT': 'Projeto',
+  'analytics.scope.ORGANIZATION': 'Organização',
+  'analytics.projectSelector.label': 'Projeto analisado',
+  'analytics.projectSelector.placeholder': 'Selecione um projeto',
+  'analytics.projectSelector.empty': 'Nenhum projeto disponível neste escopo.',
+
+  'analytics.period.presetLabel': 'Período de análise',
+  'analytics.period.preset.LAST_7_DAYS': 'Últimos 7 dias',
+  'analytics.period.preset.LAST_30_DAYS': 'Últimos 30 dias',
+  'analytics.period.preset.LAST_90_DAYS': 'Últimos 90 dias',
+  'analytics.period.preset.CURRENT_YEAR': 'Ano atual',
+  'analytics.period.preset.CUSTOM': 'Personalizado',
+  'analytics.period.customStartLabel': 'Data inicial',
+  'analytics.period.customEndLabel': 'Data final',
+  'analytics.period.applyAction': 'Aplicar período',
+  'analytics.period.invalidRangeError':
+    'A data inicial do período deve ser anterior ou igual à data final.',
+  'analytics.period.compareLabel': 'Comparar com período anterior equivalente',
+  'analytics.period.activeRangeLabel': 'Período analisado: {start} até {end}',
+  'analytics.period.previousRangeLabel': 'Período anterior equivalente: {start} até {end}',
+  'analytics.period.previousValueLabel': 'Período anterior: {value}',
+  'analytics.period.generatedAtLabel': 'Consolidado em: {date}',
+
+  'analytics.metric.unavailableBadge': 'Indisponível',
+  'analytics.metric.unavailableNotice':
+    'Indicador indisponível para o recorte atual (nunca exibido como zero implícito).',
+  'analytics.metric.reason.INSUFFICIENT_DATA': 'Dados insuficientes no período selecionado',
+  'analytics.metric.reason.NO_COMPLETED_CYCLES': 'Nenhum ciclo de execução concluído no período',
+  'analytics.metric.reason.ZERO_DENOMINATOR': 'Nenhuma tarefa criada na coorte (denominador zero)',
+  'analytics.metric.reason.UNAUTHORIZED': 'Sem autorização para visualizar este indicador',
+  'analytics.metric.hoursUnit': '{value} h',
+  'analytics.metric.daysUnit': '{value} d',
+  'analytics.metric.minutesUnit': '{value} min',
+
+  'analytics.flow.title': 'Indicadores oficiais de fluxo e entregas',
+  'analytics.flow.description':
+    'Lead Time, Cycle Time efetivo e total, Throughput (ciclos), tarefas únicas concluídas e taxa de conclusão por coorte.',
+  'analytics.flow.leadTime.label': 'Lead Time',
+  'analytics.flow.leadTime.hint':
+    'Tempo médio da criação à conclusão para tarefas concluídas dentro do período.',
+  'analytics.flow.effectiveCycleTime.label': 'Cycle Time efetivo',
+  'analytics.flow.effectiveCycleTime.hint':
+    'Tempo médio do início efetivo à conclusão descontando pausas válidas registradas.',
+  'analytics.flow.totalCycleTime.label': 'Cycle Time total',
+  'analytics.flow.totalCycleTime.hint':
+    'Tempo médio decorrido bruto entre início efetivo e conclusão, sem desconto de pausas.',
+  'analytics.flow.throughput.label': 'Throughput',
+  'analytics.flow.throughput.hint':
+    'Ciclos de execução concluídos no período (reaberturas concluídas contabilizam novos ciclos).',
+  'analytics.flow.uniqueCompletedTasks.label': 'Tarefas únicas concluídas',
+  'analytics.flow.uniqueCompletedTasks.hint':
+    'Identificadores distintos de tarefas concluídas no período, sem duplicidade por reabertura.',
+  'analytics.flow.periodCompletions.label': 'Conclusões no período',
+  'analytics.flow.periodCompletions.hint':
+    'Total de conclusões ocorridas no intervalo selecionado, independente da data de criação.',
+  'analytics.flow.cohortCompletionRate.label': 'Taxa de conclusão por coorte',
+  'analytics.flow.cohortCompletionRate.hint':
+    'Proporção de tarefas criadas no período que foram concluídas até a data de referência.',
+  'analytics.flow.totalVisibleTasks.label': 'Tarefas visíveis no escopo',
+  'analytics.flow.statusBreakdown.title': 'Distribuição atual por status',
+  'analytics.flow.statusBreakdown.description':
+    'Contagem das tarefas visíveis por estado operacional no escopo selecionado.',
+  'analytics.flow.statusBreakdown.chartTitle': 'Gráfico de tarefas por status',
+  'analytics.flow.statusBreakdown.empty': 'Nenhuma tarefa visível encontrada neste escopo.',
+  'analytics.flow.cycleComparison.chartTitle': 'Comparativo de Lead Time e Cycle Time',
+  'analytics.flow.cycleComparison.description':
+    'Comparação entre Lead Time, Cycle Time efetivo e Cycle Time total (em horas).',
+
+  'analytics.feedback.title': 'Analytics histórico de Feedbacks, SLA e Contestações',
+  'analytics.feedback.description':
+    'Consolidação item a item com preservação das versões históricas de categorias/motivos e origem de cada ciclo.',
+  'analytics.feedback.totalInPeriod.label': 'Feedbacks no período',
+  'analytics.feedback.resolvedInPeriod.label': 'Resolvidos no período',
+  'analytics.feedback.resolutionRate.label': 'Taxa de resolução',
+  'analytics.feedback.contestsInPeriod.label': 'Contestações no período',
+  'analytics.feedback.reopeningsInPeriod.label': 'Reaberturas no período',
+  'analytics.feedback.averageFirstResponse.label': 'Tempo médio de 1ª resposta',
+  'analytics.feedback.averageResolution.label': 'Tempo médio de resolução',
+  'analytics.feedback.sla.title': 'Cumprimento de SLA',
+  'analytics.feedback.sla.complianceRate.label': 'Conformidade de SLA',
+  'analytics.feedback.sla.ON_TRACK': 'No prazo',
+  'analytics.feedback.sla.WARNING': 'Alerta',
+  'analytics.feedback.sla.BREACHED': 'Estourado',
+  'analytics.feedback.cyclesByOrigin.title': 'Ciclos por origem',
+  'analytics.feedback.cyclesByOrigin.empty': 'Nenhum ciclo de feedback aberto no período.',
+  'analytics.feedback.cycleOrigin.INITIAL': 'Ciclo inicial',
+  'analytics.feedback.cycleOrigin.CONTESTATION_REOPEN': 'Reabertura por contestação',
+  'analytics.feedback.cycleOrigin.EXCEPTIONAL_REOPEN': 'Reabertura excepcional',
+  'analytics.feedback.byCategoryVersion.title': 'Distribuição por categoria (versões históricas)',
+  'analytics.feedback.byCategoryVersion.empty':
+    'Nenhuma categoria histórica registrada no período.',
+  'analytics.feedback.byContestReasonVersion.title': 'Motivos de contestação (versões históricas)',
+  'analytics.feedback.byContestReasonVersion.empty':
+    'Nenhuma contestação com motivo versionado no período.',
+  'analytics.feedback.versionBadge': 'v{version}',
+  'analytics.feedback.contestOutcomes.title': 'Decisões de contestação',
+  'analytics.feedback.contestOutcomes.empty': 'Nenhuma decisão de contestação registrada.',
+  'analytics.feedback.assigneePerformance.title': 'Desempenho por responsável',
+  'analytics.feedback.assigneePerformance.empty':
+    'Nenhum responsável com feedbacks atribuídos no período.',
+  'analytics.feedback.assigneePerformance.privacyRestricted':
+    'O detalhamento nominal por responsável está oculto conforme a política organizacional de privacidade.',
+  'analytics.feedback.columns.assignee': 'Responsável',
+  'analytics.feedback.columns.assigned': 'Atribuídos',
+  'analytics.feedback.columns.resolved': 'Resolvidos',
+  'analytics.feedback.columns.breached': 'SLA estourado',
+  'analytics.feedback.columns.avgResolution': 'Tempo médio',
+
+  'analytics.workload.title': 'Carga ponderada operacional',
+  'analytics.workload.description':
+    'Consolidação da carga de trabalho operacional em escala de 0 a 100.',
+  'analytics.workload.notHoursBadge': 'Carga ponderada (0–100, não representa horas)',
+  'analytics.workload.notHoursNotice':
+    'Aviso importante: a Carga ponderada (0–100, não representa horas) mede esforço relativo operacional e nunca deve ser interpretada como horas trabalhadas.',
+  'analytics.workload.myWorkloadTitle': 'Minha carga ponderada',
+  'analytics.workload.teamWorkloadTitle': 'Carga ponderada por membro',
+  'analytics.workload.averageTeamScoreLabel': 'Média da equipe',
+  'analytics.workload.overloadedMembersLabel': 'Membros em sobrecarga',
+  'analytics.workload.activeTasksLabel': '{count} tarefa(s) ativa(s)',
+  'analytics.workload.activeSubtasksLabel': '{count} subtarefa(s) aberta(s)',
+  'analytics.workload.privacyNotice':
+    'Política de privacidade (Default Deny): métricas individuais nominais de terceiros permanecem ocultas quando allowManagerViewIndividualProductivity está desativada.',
+  'analytics.workload.empty': 'Nenhuma carga operacional calculada para este escopo.',
+
+  'analytics.impediments.title': 'Histórico de impedimentos',
+  'analytics.impediments.description':
+    'Volume de impedimentos no período, tempo médio de resolução e agrupamento por categoria e severidade.',
+  'analytics.impediments.totalInPeriodLabel': 'Impedimentos no período',
+  'analytics.impediments.openCountLabel': 'Abertos atualmente',
+  'analytics.impediments.resolvedInPeriodLabel': 'Resolvidos no período',
+  'analytics.impediments.avgResolutionLabel': 'Tempo médio de resolução',
+  'analytics.impediments.byCategoryTitle': 'Impedimentos por categoria',
+  'analytics.impediments.bySeverityTitle': 'Impedimentos por severidade',
+  'analytics.impediments.empty': 'Nenhum impedimento registrado neste recorte.',
+
+  'analytics.bottlenecks.title': 'Consolidação de gargalos',
+  'analytics.bottlenecks.description':
+    'Alertas de gargalo ativos, distribuição por indicador/severidade e contagem de sobrecarga.',
+  'analytics.bottlenecks.totalActiveAlertsLabel': 'Alertas ativos',
+  'analytics.bottlenecks.overloadedCountLabel': 'Sobrecargas no escopo',
+  'analytics.bottlenecks.byIndicatorTitle': 'Alertas por indicador',
+  'analytics.bottlenecks.bySeverityTitle': 'Alertas por severidade',
+  'analytics.bottlenecks.alertsListTitle': 'Alertas recentes no escopo',
+  'analytics.bottlenecks.empty': 'Nenhum alerta de gargalo visível neste escopo.',
+
+  'analytics.dashboard.customizeTitle': 'Personalização do dashboard',
+  'analytics.dashboard.customizeDescription':
+    'Reordene ou oculte widgets no seu dashboard individual por escopo sem afetar outros usuários.',
+  'analytics.dashboard.editAction': 'Editar dashboard',
+  'analytics.dashboard.saveAction': 'Salvar',
+  'analytics.dashboard.discardAction': 'Descartar',
+  'analytics.dashboard.restoreDefaultAction': 'Restaurar padrão',
+  'analytics.dashboard.unsavedChangesWarning':
+    'Existem alterações não salvas no layout deste dashboard. Clique em "Salvar" ou "Descartar" antes de sair.',
+  'analytics.dashboard.saveSuccess': 'Preferências do dashboard salvas com sucesso.',
+  'analytics.dashboard.restoreSuccess': 'Layout padrão do dashboard restaurado com sucesso.',
+  'analytics.dashboard.discardedNotice': 'Alterações do rascunho descartadas.',
+  'analytics.dashboard.customBadge': 'Layout personalizado',
+  'analytics.dashboard.defaultBadge': 'Layout padrão',
+  'analytics.dashboard.widgetVisibleLabel': 'Exibir widget {name}',
+  'analytics.dashboard.moveUpAction': 'Mover widget {name} para cima',
+  'analytics.dashboard.moveDownAction': 'Mover widget {name} para baixo',
+  'analytics.dashboard.allHiddenNotice':
+    'Todos os widgets estão ocultos neste layout. Utilize "Editar dashboard" ou "Restaurar padrão" para exibi-los.',
+
+  'analytics.widgets.flow-kpis': 'Indicadores oficiais de fluxo',
+  'analytics.widgets.task-status-breakdown': 'Distribuição por status',
+  'analytics.widgets.my-workload': 'Minha carga ponderada',
+  'analytics.widgets.team-workload': 'Carga da equipe',
+  'analytics.widgets.impediments-summary': 'Resumo de impedimentos',
+  'analytics.widgets.bottlenecks-alerts': 'Alertas de gargalo',
+  'analytics.widgets.feedback-summary': 'Feedbacks e SLA',
+
+  'analytics.a11y.chartDataTableTitle': 'Tabela de dados equivalente',
+  'analytics.a11y.chartDataTableToggleShow': 'Exibir tabela de dados equivalente',
+  'analytics.a11y.chartDataTableToggleHide': 'Ocultar tabela de dados equivalente',
+  'analytics.a11y.chartTextSummaryLabel': 'Resumo textual do gráfico: {summary}',
+  'analytics.a11y.tableDimensionColumn': 'Indicador / Dimensão',
+  'analytics.a11y.tableValueColumn': 'Valor',
+
+  'analytics.calibration.title': 'Calibração de regras e pesos de Analytics',
+  'analytics.calibration.description':
+    'Ajuste os pesos da Carga ponderada e do Modo Foco, além do limiar padrão de inatividade para novos projetos.',
+  'analytics.calibration.adminOnlyNotice':
+    'Governança exclusiva de Administrador (ADMIN — ANALYTICS_RULES_MANAGE). Todas as alterações exigem soma = 100% por grupo e gravam evento de auditoria.',
+  'analytics.calibration.workloadSectionTitle': 'Pesos de Carga de Trabalho (Workload)',
+  'analytics.calibration.workloadPriorityWeightLabel': 'Peso de prioridade',
+  'analytics.calibration.workloadDelayWeightLabel': 'Peso de atraso e prazo',
+  'analytics.calibration.workloadImpedimentsWeightLabel': 'Peso de impedimentos',
+  'analytics.calibration.workloadOperationalStateWeightLabel': 'Peso de estado operacional',
+  'analytics.calibration.workloadPausedFactorLabel': 'Fator para tarefas pausadas (0 a 1)',
+  'analytics.calibration.focusSectionTitle': 'Pesos do Modo Foco',
+  'analytics.calibration.focusPriorityWeightLabel': 'Peso de prioridade oficial',
+  'analytics.calibration.focusDeadlineWeightLabel': 'Peso de prazo e atraso',
+  'analytics.calibration.focusDependenciesWeightLabel': 'Peso de dependências liberadas',
+  'analytics.calibration.focusInactivityWeightLabel': 'Peso de inatividade',
+  'analytics.calibration.focusWorkloadCompatibilityWeightLabel':
+    'Peso de compatibilidade com carga',
+  'analytics.calibration.inactivityThresholdLabel':
+    'Limiar padrão de inatividade de projeto (dias)',
+  'analytics.calibration.sumLabel': 'Soma do grupo: {percent}% (obrigatório: 100%)',
+  'analytics.calibration.sumMismatchError':
+    'A soma dos pesos do grupo deve ser exatamente 100% (1,00).',
+  'analytics.calibration.justificationLabel': 'Justificativa da calibração (opcional)',
+  'analytics.calibration.justificationPlaceholder':
+    'Descreva o motivo organizacional do ajuste dos pesos...',
+  'analytics.calibration.saveAction': 'Salvar calibração',
+  'analytics.calibration.saveSuccess':
+    'Pesos de calibração salvos com sucesso e registrados na trilha de auditoria.',
+  'analytics.calibration.updatedAtLabel': 'Última calibração: {date}',
+
+  'reports.title': 'Relatórios',
+  'reports.pageTitle': 'Relatórios | PMS',
+  'reports.subtitle':
+    'Gere pré-visualizações tabulares e exporte relatórios oficiais em JSON, CSV, PDF e XLSX com paridade garantida.',
+  'reports.liveRegionLabel': 'Atualizações de geração e exportação de relatórios',
+  'reports.demoIsolationNotice':
+    'Ambiente demonstrativo isolado: os relatórios consolidam apenas dados da organização demonstrativa ativa.',
+  'reports.emptyOrgTitle': 'Nenhuma organização ativa',
+  'reports.emptyOrgDescription':
+    'Selecione ou crie uma organização para acessar o catálogo de relatórios.',
+  'reports.noPermission':
+    'Seu perfil atual não possui permissão para visualizar este relatório no escopo selecionado.',
+
+  'reports.catalog.title': 'Catálogo de relatórios oficiais',
+  'reports.catalog.description':
+    'Selecione um dos quatro relatórios pré-construídos, defina escopo e período e gere a pré-visualização antes de exportar.',
+  'reports.kind.PROJECT_DELIVERY_FLOW.title': 'Entrega & Fluxo por Projeto',
+  'reports.kind.PROJECT_DELIVERY_FLOW.description':
+    'Lead Time, Cycle Time efetivo e total, Throughput, tarefas únicas concluídas, coorte, status e impedimentos do projeto.',
+  'reports.kind.PRODUCTIVITY_WORKLOAD.title': 'Produtividade e Carga',
+  'reports.kind.PRODUCTIVITY_WORKLOAD.description':
+    'Carga ponderada (0–100, não representa horas), tarefas visíveis e sobrecarga conforme política organizacional de privacidade.',
+  'reports.kind.FEEDBACK_SLA_CONTESTS.title': 'Feedbacks, SLA & Contestações',
+  'reports.kind.FEEDBACK_SLA_CONTESTS.description':
+    'Volumes, SLA, origens de ciclo, versões históricas de categorias/motivos e contestações com segregação de notas internas.',
+  'reports.kind.ORGANIZATION_EXECUTIVE_SUMMARY.title': 'Resumo Executivo Organizacional',
+  'reports.kind.ORGANIZATION_EXECUTIVE_SUMMARY.description':
+    'Consolidado executivo de entrega, gargalos, impedimentos e conformidade de SLA na organização ativa.',
+
+  'reports.filters.title': 'Parâmetros e filtros do relatório',
+  'reports.filters.kindLabel': 'Modelo de relatório',
+  'reports.filters.scopeLabel': 'Escopo',
+  'reports.scope.PROJECT': 'Projeto',
+  'reports.scope.ORGANIZATION': 'Organização',
+  'reports.filters.projectLabel': 'Projeto',
+  'reports.filters.projectPlaceholder': 'Selecione um projeto',
+  'reports.filters.presetLabel': 'Período',
+  'reports.filters.customStartLabel': 'Data inicial',
+  'reports.filters.customEndLabel': 'Data final',
+  'reports.filters.compareLabel': 'Incluir comparação com período anterior equivalente',
+  'reports.filters.previewAction': 'Gerar pré-visualização',
+  'reports.filters.previewing': 'Gerando pré-visualização...',
+  'reports.filters.scopeProjectRequiredError':
+    'Selecione um projeto para gerar um relatório com escopo de projeto.',
+
+  'reports.preview.title': 'Pré-visualização do relatório',
+  'reports.preview.emptyTitle': 'Nenhuma pré-visualização gerada',
+  'reports.preview.emptyDescription':
+    'Configure os parâmetros acima e clique em "Gerar pré-visualização" para inspecionar KPIs e linhas antes de exportar.',
+  'reports.preview.parityNotice':
+    'Paridade pré-visualização ↔ exportação: o arquivo baixado é gerado exatamente a partir do mesmo snapshot, filtros e decisões de autorização desta pré-visualização.',
+  'reports.preview.generatedAtLabel': 'Snapshot gerado em: {date}',
+  'reports.preview.organizationLabel': 'Organização: {name}',
+  'reports.preview.projectLabel': 'Projeto: {name}',
+  'reports.preview.rowCountLabel': '{count} linha(s) exibida(s)',
+  'reports.preview.emptyRows': 'Nenhuma linha detalhada disponível para os parâmetros informados.',
+
+  'reports.privacy.thirdPartyIncludedNotice':
+    'Métricas nominais de terceiros incluídas conforme autorização vigente.',
+  'reports.privacy.thirdPartyHiddenNotice':
+    'Privacidade ativa (allowManagerViewIndividualProductivity / Default Deny): métricas nominais individuais de terceiros foram omitidas deste relatório.',
+  'reports.privacy.feedbackSegregationNotice':
+    'Feedbacks filtrados item a item conforme autorização; notas internas e anexos internos são estritamente excluídos quando não autorizados.',
+
+  'reports.export.title': 'Exportação segura',
+  'reports.export.description':
+    'Exporte o relatório atual em JSON, CSV, PDF ou XLSX com registro automático em trilha de auditoria.',
+  'reports.export.format.JSON': 'Exportar JSON',
+  'reports.export.format.CSV': 'Exportar CSV',
+  'reports.export.format.PDF': 'Exportar PDF',
+  'reports.export.format.XLSX': 'Exportar XLSX',
+  'reports.export.exporting': 'Gerando arquivo {format}...',
+  'reports.export.success':
+    'Arquivo "{fileName}" ({format}) baixado com sucesso e registrado na auditoria.',
+  'reports.export.noPermission':
+    'Você não possui permissão para exportar este relatório (REPORT_EXPORT e ANALYTICS_EXPORT).',
+  'reports.export.sanitizationNotice':
+    'Proteção ativa: planilhas CSV e XLSX neutralizam gatilhos de fórmula (=, +, -, @, tab) e gravam apenas valores literais sem fórmulas.',
 
   'validation.required': 'Este campo é obrigatório.',
   'validation.emailInvalid': 'Informe um endereço de e-mail válido.',

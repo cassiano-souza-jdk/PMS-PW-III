@@ -2,25 +2,36 @@ export {
   REPORT_CATALOG,
   REPORT_FORMATS,
   REPORT_KINDS,
+  REPORT_PERIOD_PRESETS,
+  REPORT_PREVIEW_STATUSES,
   REPORT_SCOPES,
+  REPORT_TITLES,
   assertValidReportFilters,
   isReportFormat,
   isReportKind,
+  type ExportReportInput,
+  type PreviewReportInput,
+  type ReportCatalogCapabilityView,
+  type ReportCatalogEntryView,
+  type ReportCellValue,
+  type ReportColumn,
   type ReportDefinition,
+  type ReportExportResult,
+  type ReportExportState,
+  type ReportFilterFormState,
   type ReportFilters,
   type ReportFormat,
   type ReportKind,
+  type ReportKpiItem,
+  type ReportPeriodPreset,
+  type ReportPreviewState,
+  type ReportPreviewStatus,
+  type ReportProjectOption,
+  type ReportRow,
   type ReportScope,
-} from './domain/report-catalog';
-export type {
-  ReportCatalogEntryView,
-  ReportCellValue,
-  ReportColumn,
-  ReportExportResult,
-  ReportKpiItem,
-  ReportRow,
-  ReportSnapshot,
-} from './domain/report-snapshot';
+  type ReportSnapshot,
+  type ReportsPanelFeedback,
+} from './application/contracts';
 export type {
   ReportExportAuditInput,
   ReportSubjectLabelsSnapshot,
@@ -32,10 +43,4 @@ export {
   exportReportToPdf,
   exportReportToXlsx,
 } from './application/exporters';
-export {
-  REPORT_TITLES,
-  ReportService,
-  type ExportReportInput,
-  type PreviewReportInput,
-  type ReportServiceDependencies,
-} from './application/services/report-service';
+export { ReportService, type ReportServiceDependencies } from './application/services/report-service';

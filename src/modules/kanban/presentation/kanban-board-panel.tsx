@@ -19,6 +19,7 @@ import { zodResolver } from '@hookform/resolvers/zod';
 import {
   IconAlertTriangle,
   IconArrowLeft,
+  IconChartBar,
   IconColumns3,
   IconListCheck,
   IconPlus,
@@ -147,6 +148,7 @@ export interface KanbanPanelFeedback {
 export interface KanbanBoardPanelProps {
   readonly boardView: ProjectBoardView;
   readonly canOpenBottlenecks?: boolean;
+  readonly canOpenAnalytics?: boolean;
   readonly isLoading?: boolean;
   readonly feedback?: KanbanPanelFeedback | null;
   readonly onBackToProjects: () => void;
@@ -193,6 +195,7 @@ function isDependencyConflictError(error: unknown): boolean {
 export function KanbanBoardPanel({
   boardView,
   canOpenBottlenecks = false,
+  canOpenAnalytics = false,
   isLoading = false,
   feedback = null,
   onBackToProjects,
@@ -699,6 +702,15 @@ export function KanbanBoardPanel({
                 <Link to={`/projects/${project.id}/bottlenecks`}>
                   <IconAlertTriangle className="h-4 w-4" aria-hidden="true" />
                   <span>{intl.formatMessage({ id: 'kanban.openBottlenecksAction' })}</span>
+                </Link>
+              </Button>
+            ) : null}
+
+            {canOpenAnalytics ? (
+              <Button asChild variant="outline" className="min-h-[44px]">
+                <Link to={`/projects/${project.id}/analytics`}>
+                  <IconChartBar className="h-4 w-4" aria-hidden="true" />
+                  <span>{intl.formatMessage({ id: 'kanban.openAnalyticsAction' })}</span>
                 </Link>
               </Button>
             ) : null}

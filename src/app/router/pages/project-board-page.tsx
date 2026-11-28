@@ -282,6 +282,20 @@ export function ProjectBoardPage() {
     projectArchivedAt: boardView.project.archivedAt,
   });
 
+  const canOpenAnalytics = can(PERMISSION_CODES.ANALYTICS_PROJECT_VIEW, {
+    kind: 'ANALYTICS',
+    id: asEntityId(boardView.project.id),
+    exists: true,
+    organizationId: boardView.project.organizationId,
+    projectId: boardView.project.id,
+    teamId: boardView.project.teamId,
+    ownerUserId: boardView.project.ownerUserId,
+    deletedAt: boardView.project.deletedAt,
+    archivedAt: boardView.project.archivedAt,
+    projectArchivedAt: boardView.project.archivedAt,
+    includesThirdPartyIndividualMetrics: false,
+  });
+
   const effectiveBoardView: ProjectBoardView = {
     ...boardView,
     permissions: {
@@ -493,6 +507,7 @@ export function ProjectBoardPage() {
     <KanbanBoardPanel
       boardView={effectiveBoardView}
       canOpenBottlenecks={canOpenBottlenecks}
+      canOpenAnalytics={canOpenAnalytics}
       feedback={feedback}
       onBackToProjects={handleBackToProjects}
       onMoveCard={handleMoveCard}
