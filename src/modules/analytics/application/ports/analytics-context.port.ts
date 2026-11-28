@@ -5,12 +5,14 @@ import type {
   ImpedimentId,
   ImpedimentSeverity,
   IsoDateTime,
+  MembershipStatus,
   OrganizationId,
   OrganizationRole,
   Priority,
   ProjectId,
   TaskId,
   TaskStatus,
+  TeamId,
   UserId,
 } from '@/shared/kernel';
 
@@ -31,7 +33,9 @@ export interface AnalyticsActorProfileSnapshot {
   readonly organizationId: OrganizationId;
   readonly userId: UserId;
   readonly role: OrganizationRole;
+  readonly membershipStatus?: MembershipStatus;
   readonly managedProjectIds: readonly ProjectId[];
+  readonly participatedProjectIds?: readonly ProjectId[];
   readonly allowManagerViewIndividualProductivity: boolean;
   readonly isDemoOrganization: boolean;
 }
@@ -40,6 +44,11 @@ export interface AnalyticsProjectSnapshot {
   readonly projectId: ProjectId;
   readonly name: string;
   readonly status: string;
+  readonly teamId?: TeamId;
+  readonly ownerUserId?: UserId;
+  readonly archivedAt?: IsoDateTime;
+  readonly deletedAt?: IsoDateTime;
+  readonly inactivityThresholdDays?: number;
   readonly managerUserIds: readonly UserId[];
   readonly memberUserIds: readonly UserId[];
   readonly isDeleted: boolean;
@@ -51,10 +60,16 @@ export interface AnalyticsWorkTaskSnapshot {
   readonly title: string;
   readonly status: TaskStatus;
   readonly priority: Priority;
+  readonly createdByUserId?: UserId;
+  readonly primaryAssigneeId?: UserId;
+  readonly participantUserIds?: readonly UserId[];
   readonly assigneeUserIds: readonly UserId[];
   readonly createdAt: IsoDateTime;
+  readonly lastMovedAt?: IsoDateTime;
   readonly completedAt?: IsoDateTime;
-  readonly dueDate?: string;
+  readonly dueDate?: IsoDateTime;
+  readonly deletedAt?: IsoDateTime;
+  readonly openImpedimentsMaxSeverity?: ImpedimentSeverity;
   readonly isDeleted: boolean;
 }
 
@@ -92,13 +107,17 @@ export interface AnalyticsFeedbackSnapshot {
   readonly projectId?: ProjectId;
   readonly authorUserId: UserId;
   readonly assigneeUserId?: UserId;
+  readonly moduleKey?: string;
+  readonly priority?: Priority;
   readonly status: string;
+  readonly currentCycleId?: FeedbackCycleId;
   readonly categoryId: string;
   readonly categoryVersionId: string;
   readonly createdAt: IsoDateTime;
   readonly firstResponseAt?: IsoDateTime;
   readonly resolvedAt?: IsoDateTime;
   readonly closedAt?: IsoDateTime;
+  readonly closureReason?: string;
 }
 
 export interface AnalyticsFeedbackCycleSnapshot {
@@ -107,10 +126,18 @@ export interface AnalyticsFeedbackCycleSnapshot {
   readonly cycleNumber: number;
   /** `INITIAL` | `CONTESTATION_REOPEN` | `EXCEPTIONAL_REOPEN` (mapped by the adapter). */
   readonly origin: string;
+  readonly status?: string;
+  readonly assigneeUserId?: UserId;
   readonly openedAt: IsoDateTime;
+  readonly firstRespondedAt?: IsoDateTime;
   readonly resolvedAt?: IsoDateTime;
+  readonly closedAt?: IsoDateTime;
   /** SLA state at snapshot time: `ON_TRACK` | `WARNING` | `BREACHED` (mapped by the adapter). */
   readonly slaState?: string;
+  readonly firstResponseWarningAt?: IsoDateTime;
+  readonly firstResponseBreachedAt?: IsoDateTime;
+  readonly resolutionWarningAt?: IsoDateTime;
+  readonly resolutionBreachedAt?: IsoDateTime;
 }
 
 export interface AnalyticsFeedbackContestSnapshot {

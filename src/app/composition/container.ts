@@ -1,3 +1,4 @@
+import { AnalyticsService } from '@/modules/analytics';
 import {
   AuthService,
   type EphemeralSessionPointerPort,
@@ -18,6 +19,7 @@ import { InvitationService } from '@/modules/invitations';
 import { KanbanService } from '@/modules/kanban';
 import { OrganizationService } from '@/modules/organizations';
 import { ProjectService } from '@/modules/projects';
+import { ReportService } from '@/modules/reports';
 import { TaskService } from '@/modules/tasks';
 import { TeamService } from '@/modules/teams';
 import { UserService } from '@/modules/users';
@@ -45,6 +47,7 @@ import {
   type CreatePmsDatabaseOptions,
   type PmsDatabase,
 } from '@/shared/persistence';
+import { createAnalyticsPortsAdapter } from './analytics-ports-adapter';
 import {
   createAuthorizationAuditWriterAdapter,
   createAuthorizationContextLookupAdapter,
@@ -80,6 +83,8 @@ export interface AppServicesRegistry {
   readonly focus: FocusService;
   readonly bottlenecks: BottleneckService;
   readonly feedback: FeedbackService;
+  readonly analytics: AnalyticsService;
+  readonly reports: ReportService;
   readonly authorization: AuthorizationManagementService;
 }
 
@@ -172,6 +177,39 @@ export function createAppContainer(
       );
     return member !== null && member.status === MEMBERSHIP_STATUSES.ACTIVE;
   };
+
+  const analyticsPortsAdapter = createAnalyticsPortsAdapter({
+    repositories: resolvedRepositories,
+    ...(options.now !== undefined ? { now: options.now } : {}),
+    ...(options.generateUuid !== undefined ? { generateUuid: options.generateUuid } : {}),
+  });
+
+  const analyticsService = new AnalyticsService({
+    dashboardPreferences: resolvedRepositories.analytics.dashboardPreferences,
+    workContext: analyticsPortsAdapter,
+    governance: analyticsPortsAdapter,
+    permissionGrants: resolvedRepositories.authorization.permissionGrants,
+    explicitDenyRules: resolvedRepositories.authorization.explicitDenyRules,
+    transactionPort: resolvedTransactionPort,
+    eventBus: resolvedEventBus,
+    logger: resolvedLogger,
+    ...(options.now !== undefined ? { now: options.now } : {}),
+    ...(options.generateUuid !== undefined ? { generateUuid: options.generateUuid } : {}),
+  });
+
+  const reportService = new ReportService({
+    reportsContext: analyticsPortsAdapter,
+    analyticsService,
+    analyticsWorkContext: analyticsPortsAdapter,
+    analyticsGovernance: analyticsPortsAdapter,
+    permissionGrants: resolvedRepositories.authorization.permissionGrants,
+    explicitDenyRules: resolvedRepositories.authorization.explicitDenyRules,
+    transactionPort: resolvedTransactionPort,
+    eventBus: resolvedEventBus,
+    logger: resolvedLogger,
+    ...(options.now !== undefined ? { now: options.now } : {}),
+    ...(options.generateUuid !== undefined ? { generateUuid: options.generateUuid } : {}),
+  });
 
   const resolvedServices: AppServicesRegistry =
     options.services ??
@@ -392,6 +430,8 @@ export function createAppContainer(
         ...(options.now !== undefined ? { now: options.now } : {}),
         ...(options.generateUuid !== undefined ? { generateUuid: options.generateUuid } : {}),
       }),
+      analytics: analyticsService,
+      reports: reportService,
       authorization: new AuthorizationManagementService({
         permissionGrants: resolvedRepositories.authorization.permissionGrants,
         explicitDenyRules: resolvedRepositories.authorization.explicitDenyRules,
