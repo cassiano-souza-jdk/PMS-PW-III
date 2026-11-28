@@ -65,6 +65,8 @@ export interface SubtaskRepositoryPort {
 
 export interface TaskPauseRepositoryPort {
   listByTask(organizationId: OrganizationId, taskId: TaskId): Promise<readonly TaskPause[]>;
+  /** Bulk organization-scoped read for Analytics (ADR-0014 §5), avoiding N+1 per task. */
+  listByOrganization(organizationId: OrganizationId): Promise<readonly TaskPause[]>;
   save(pause: TaskPause): Promise<void>;
 }
 
@@ -73,6 +75,8 @@ export interface TaskExecutionCycleRepositoryPort {
     organizationId: OrganizationId,
     taskId: TaskId,
   ): Promise<readonly TaskExecutionCycle[]>;
+  /** Bulk organization-scoped read for Analytics (ADR-0014 §5), avoiding N+1 per task. */
+  listByOrganization(organizationId: OrganizationId): Promise<readonly TaskExecutionCycle[]>;
   listByProject(
     organizationId: OrganizationId,
     projectId: ProjectId,

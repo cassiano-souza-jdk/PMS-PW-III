@@ -1,6 +1,6 @@
 # Índice do pacote PMS
 
-Total de arquivos Markdown: 41
+Total de arquivos Markdown: 42
 
 -   `ACCESSIBILITY.md`
 -   `ADR/ADR-0001-modular-layered-architecture.md`
@@ -16,6 +16,7 @@ Total de arquivos Markdown: 41
 -   `ADR/ADR-0011-tasks-subtasks-dependencies-and-impediments-architecture.md`
 -   `ADR/ADR-0012-focus-mode-workload-and-bottlenecks-architecture.md`
 -   `ADR/ADR-0013-feedback-sla-and-contestation-architecture.md`
+-   `ADR/ADR-0014-analytics-dashboards-and-reports-architecture.md`
 -   `AGENT-ROLES.md`
 -   `AGENT-WORKFLOW.md`
 -   `AGENTS.md`
