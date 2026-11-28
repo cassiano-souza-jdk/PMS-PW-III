@@ -2,6 +2,7 @@ import { createBrowserRouter, type RouteObject } from 'react-router';
 import { AppShell } from '@/app/layout/app-shell';
 import {
   LazyAcceptInvitationPage,
+  LazyAnalyticsPage,
   LazyBottlenecksPage,
   LazyDemoPage,
   LazyFeedbackDetailPage,
@@ -21,6 +22,7 @@ import {
   LazyProjectsPage,
   LazyRecoverPasswordPage,
   LazyRegisterPage,
+  LazyReportsPage,
   LazyTaskDetailPage,
   LazyTeamsPage,
 } from './lazy-pages';
@@ -101,6 +103,18 @@ export const appRoutes: RouteObject[] = [
           {
             path: 'feedback/:feedbackId',
             element: <LazyFeedbackDetailPage />,
+          },
+          {
+            path: 'analytics',
+            element: <LazyAnalyticsPage />,
+          },
+          {
+            path: 'projects/:projectId/analytics',
+            element: <LazyAnalyticsPage />,
+          },
+          {
+            path: 'reports',
+            element: <LazyReportsPage />,
           },
           {
             path: 'invitations',
