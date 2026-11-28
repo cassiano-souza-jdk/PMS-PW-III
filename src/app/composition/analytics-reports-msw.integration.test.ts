@@ -15,6 +15,7 @@ import {
   BOTTLENECK_INDICATORS,
   asBottleneckAlertId,
 } from '@/modules/bottlenecks';
+import { PERMISSION_CODES, PERMISSION_SCOPE_TYPES } from '@/modules/authorization';
 import { FEEDBACK_STATUSES, type FeedbackInternalNote } from '@/modules/feedback';
 import { asFeedbackInternalNoteId } from '@/modules/feedback/domain/feedback';
 import {
@@ -435,7 +436,11 @@ describe('Phase 10 — AnalyticsService, ReportService, Dexie Ports Adapter, DN-
     expect(exportPdfRes.headers.get('content-type')).toBe('application/pdf');
     const pdfText = new TextDecoder('latin1').decode(await exportPdfRes.arrayBuffer());
     expect(pdfText.startsWith('%PDF-1.4\n')).toBe(true);
+    expect(pdfText).toContain('xref\n');
     expect(pdfText.trimEnd().endsWith('%%EOF')).toBe(true);
+    expect(exportPdfRes.headers.get('content-disposition')).toContain(
+      `organization-executive-summary-${DEMO_ORG_ID}.pdf`,
+    );
 
     // 4. Binary XLSX export
     const exportXlsxRes = await fetch(
@@ -458,9 +463,21 @@ describe('Phase 10 — AnalyticsService, ReportService, Dexie Ports Adapter, DN-
     expect(exportXlsxRes.headers.get('content-type')).toBe(
       'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
     );
+    expect(exportXlsxRes.headers.get('content-disposition')).toContain(
+      `feedback-sla-contests-${DEMO_ORG_ID}.xlsx`,
+    );
     const xlsxBytes = new Uint8Array(await exportXlsxRes.arrayBuffer());
     expect(xlsxBytes[0]).toBe(0x50);
     expect(xlsxBytes[1]).toBe(0x4b);
+    expect(xlsxBytes[2]).toBe(0x03);
+    expect(xlsxBytes[3]).toBe(0x04);
+    expect(xlsxBytes[xlsxBytes.length - 22]).toBe(0x50);
+    expect(xlsxBytes[xlsxBytes.length - 21]).toBe(0x4b);
+    expect(xlsxBytes[xlsxBytes.length - 20]).toBe(0x05);
+    expect(xlsxBytes[xlsxBytes.length - 19]).toBe(0x06);
+    const rawXlsxAscii = new TextDecoder('latin1').decode(xlsxBytes);
+    expect(rawXlsxAscii).toContain('t="inlineStr"');
+    expect(rawXlsxAscii).not.toContain('<f');
 
     // 5. CSV export
     const exportCsvRes = await fetch(
@@ -482,6 +499,9 @@ describe('Phase 10 — AnalyticsService, ReportService, Dexie Ports Adapter, DN-
     );
     expect(exportCsvRes.status).toBe(200);
     expect(exportCsvRes.headers.get('content-type')).toBe('text/csv');
+    expect(exportCsvRes.headers.get('content-disposition')).toContain(
+      `project-delivery-flow-${DEMO_ORG_ID}.csv`,
+    );
 
     // Verify AUDIT_CATEGORIES.EXPORT events were recorded
     const exportAudits = await container.repositories.audit.auditEvents.listByOrganization(
@@ -547,5 +567,200 @@ describe('Phase 10 — AnalyticsService, ReportService, Dexie Ports Adapter, DN-
         },
       }),
     ).rejects.toThrow(ValidationError);
+  });
+
+  it('returns 401 when unauthenticated and 403/422 for RBAC, ExplicitDeny, cross-org and malformed payloads across all §13 MSW endpoints', async () => {
+    const unauthHeaders = { 'content-type': 'application/json' };
+
+    // 401 across all §13 endpoints without actor header
+    expect(
+      (
+        await fetch(
+          `http://localhost/api/v1/organizations/${DEMO_ORG_ID}/analytics?scope=PERSONAL`,
+          { headers: unauthHeaders },
+        )
+      ).status,
+    ).toBe(401);
+    expect(
+      (
+        await fetch(
+          `http://localhost/api/v1/organizations/${DEMO_ORG_ID}/projects/${DEMO_PROJECT_ID}/analytics`,
+          { headers: unauthHeaders },
+        )
+      ).status,
+    ).toBe(401);
+    expect(
+      (
+        await fetch(
+          `http://localhost/api/v1/organizations/${DEMO_ORG_ID}/dashboard-preferences?scope=PERSONAL`,
+          { headers: unauthHeaders },
+        )
+      ).status,
+    ).toBe(401);
+    expect(
+      (
+        await fetch(
+          `http://localhost/api/v1/organizations/${DEMO_ORG_ID}/settings/analytics-rules`,
+          { headers: unauthHeaders },
+        )
+      ).status,
+    ).toBe(401);
+    expect(
+      (
+        await fetch(`http://localhost/api/v1/organizations/${DEMO_ORG_ID}/reports/catalog`, {
+          headers: unauthHeaders,
+        })
+      ).status,
+    ).toBe(401);
+    expect(
+      (
+        await fetch(`http://localhost/api/v1/organizations/${DEMO_ORG_ID}/reports/preview`, {
+          method: 'POST',
+          headers: unauthHeaders,
+          body: JSON.stringify({}),
+        })
+      ).status,
+    ).toBe(401);
+    expect(
+      (
+        await fetch(`http://localhost/api/v1/organizations/${DEMO_ORG_ID}/reports/export`, {
+          method: 'POST',
+          headers: unauthHeaders,
+          body: JSON.stringify({}),
+        })
+      ).status,
+    ).toBe(401);
+
+    // 200 PERSONAL analytics with compareWithPreviousPeriod=false
+    const personalRes = await fetch(
+      `http://localhost/api/v1/organizations/${DEMO_ORG_ID}/analytics?scope=PERSONAL&compareWithPreviousPeriod=false`,
+      { headers: authHeaders(DEMO_MEMBER_USER_ID) },
+    );
+    expect(personalRes.status).toBe(200);
+    const personalBody = (await personalRes.json()) as ApiSuccessEnvelope<AnalyticsOverview>;
+    expect(personalBody.data.scope).toBe(DASHBOARD_SCOPES.PERSONAL);
+    expect(personalBody.data.previousPeriod).toBeUndefined();
+
+    // 403 RBAC on ORGANIZATION dashboard preference, PATCH analytics-rules, and ORGANIZATION report preview for MEMBER
+    expect(
+      (
+        await fetch(
+          `http://localhost/api/v1/organizations/${DEMO_ORG_ID}/dashboard-preferences?scope=ORGANIZATION`,
+          { headers: authHeaders(DEMO_MEMBER_USER_ID) },
+        )
+      ).status,
+    ).toBe(403);
+    expect(
+      (
+        await fetch(
+          `http://localhost/api/v1/organizations/${DEMO_ORG_ID}/settings/analytics-rules`,
+          {
+            method: 'PATCH',
+            headers: authHeaders(DEMO_MEMBER_USER_ID),
+            body: JSON.stringify({ calibratableWeights: { workloadPausedFactor: 0.25 } }),
+          },
+        )
+      ).status,
+    ).toBe(403);
+    expect(
+      (
+        await fetch(`http://localhost/api/v1/organizations/${DEMO_ORG_ID}/reports/preview`, {
+          method: 'POST',
+          headers: authHeaders(DEMO_MEMBER_USER_ID),
+          body: JSON.stringify({
+            kind: REPORT_KINDS.ORGANIZATION_EXECUTIVE_SUMMARY,
+            scope: REPORT_SCOPES.ORGANIZATION,
+            period: {
+              start: '2026-03-20T00:00:00.000Z',
+              end: '2026-04-20T23:59:59.000Z',
+            },
+          }),
+        })
+      ).status,
+    ).toBe(403);
+
+    // 403 cross-org over HTTP (seed OTHER_ORG_ID owned by another user so org exists but DEMO_ADMIN has no membership)
+    const outsider = await container.services.auth.registerUser({
+      email: 'outsider.msw@pms.local',
+      password: 'PasswordForte!2026',
+      displayName: 'Outsider Org',
+      acceptTerms: true,
+      persistent: true,
+    });
+    const { organization: otherOrg } = await container.services.organizations.createOrganization(
+      outsider.user.id,
+      {
+        name: 'Other Org MSW',
+        slug: 'other-org-msw',
+      },
+    );
+    expect(
+      (
+        await fetch(
+          `http://localhost/api/v1/organizations/${otherOrg.id}/analytics?scope=PERSONAL`,
+          {
+            headers: authHeaders(DEMO_ADMIN_USER_ID),
+          },
+        )
+      ).status,
+    ).toBe(403);
+    expect(
+      (
+        await fetch(
+          `http://localhost/api/v1/organizations/${OTHER_ORG_ID}/analytics?scope=PERSONAL`,
+          {
+            headers: authHeaders(DEMO_ADMIN_USER_ID),
+          },
+        )
+      ).status,
+    ).toBe(404);
+
+    // 403 ExplicitDenyRule on REPORT_EXPORT
+    await container.services.authorization.createExplicitDenyRule(DEMO_ADMIN_USER_ID, DEMO_ORG_ID, {
+      targetUserId: DEMO_MEMBER_USER_ID,
+      permission: PERMISSION_CODES.REPORT_EXPORT,
+      scopeType: PERMISSION_SCOPE_TYPES.ORGANIZATION,
+      reason: 'Deny export in MSW test',
+    });
+    expect(
+      (
+        await fetch(`http://localhost/api/v1/organizations/${DEMO_ORG_ID}/reports/export`, {
+          method: 'POST',
+          headers: authHeaders(DEMO_MEMBER_USER_ID),
+          body: JSON.stringify({
+            kind: REPORT_KINDS.PROJECT_DELIVERY_FLOW,
+            scope: REPORT_SCOPES.PROJECT,
+            projectId: DEMO_PROJECT_ID,
+            period: {
+              start: '2026-03-20T00:00:00.000Z',
+              end: '2026-04-20T23:59:59.000Z',
+            },
+            format: REPORT_FORMATS.JSON,
+          }),
+        })
+      ).status,
+    ).toBe(403);
+
+    // 422 validation errors on partial custom range and invalid reset body
+    expect(
+      (
+        await fetch(
+          `http://localhost/api/v1/organizations/${DEMO_ORG_ID}/analytics?scope=ORGANIZATION&preset=CUSTOM&start=2026-04-01T00:00:00.000Z`,
+          { headers: authHeaders(DEMO_ADMIN_USER_ID) },
+        )
+      ).status,
+    ).toBe(422);
+    expect(
+      (
+        await fetch(
+          `http://localhost/api/v1/organizations/${DEMO_ORG_ID}/dashboard-preferences/reset`,
+          {
+            method: 'POST',
+            headers: authHeaders(DEMO_ADMIN_USER_ID),
+            body: JSON.stringify({}),
+          },
+        )
+      ).status,
+    ).toBe(422);
   });
 });
