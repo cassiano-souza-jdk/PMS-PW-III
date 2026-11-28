@@ -1,4 +1,5 @@
 import { delay, http, HttpResponse, type HttpHandler } from 'msw';
+import { AnalyticsService } from '@/modules/analytics';
 import {
   AuthService,
   asSessionId,
@@ -88,6 +89,7 @@ import {
   type TransferProjectTeamInput,
   type UpdateProjectInput,
 } from '@/modules/projects';
+import { ReportService } from '@/modules/reports';
 import {
   TaskService,
   asTagId,
@@ -156,6 +158,8 @@ import {
   type UserId,
 } from '@/shared/kernel';
 import { PMS_DATABASE_NAME, PMS_SCHEMA_VERSION } from '@/shared/persistence';
+import { createAnalyticsPortsAdapter } from './analytics-ports-adapter';
+import { createAnalyticsAndReportsMswHandlers } from './analytics-reports-msw-handlers';
 import {
   createAuthorizationAuditWriterAdapter,
   createAuthorizationContextLookupAdapter,
@@ -453,6 +457,37 @@ function resolveMswServices(deps: MswCompositionDependencies): AppServicesRegist
     return member !== null && member.status === MEMBERSHIP_STATUSES.ACTIVE;
   };
 
+  const analyticsPortsAdapter = createAnalyticsPortsAdapter({
+    repositories: deps.repositories,
+    ...(deps.now !== undefined ? { now: deps.now } : {}),
+    ...(deps.generateUuid !== undefined ? { generateUuid: deps.generateUuid } : {}),
+  });
+
+  const analyticsService = new AnalyticsService({
+    dashboardPreferences: deps.repositories.analytics.dashboardPreferences,
+    workContext: analyticsPortsAdapter,
+    governance: analyticsPortsAdapter,
+    permissionGrants: deps.repositories.authorization.permissionGrants,
+    explicitDenyRules: deps.repositories.authorization.explicitDenyRules,
+    transactionPort: deps.transactionPort,
+    eventBus: deps.eventBus,
+    ...(deps.now !== undefined ? { now: deps.now } : {}),
+    ...(deps.generateUuid !== undefined ? { generateUuid: deps.generateUuid } : {}),
+  });
+
+  const reportService = new ReportService({
+    reportsContext: analyticsPortsAdapter,
+    analyticsService,
+    analyticsWorkContext: analyticsPortsAdapter,
+    analyticsGovernance: analyticsPortsAdapter,
+    permissionGrants: deps.repositories.authorization.permissionGrants,
+    explicitDenyRules: deps.repositories.authorization.explicitDenyRules,
+    transactionPort: deps.transactionPort,
+    eventBus: deps.eventBus,
+    ...(deps.now !== undefined ? { now: deps.now } : {}),
+    ...(deps.generateUuid !== undefined ? { generateUuid: deps.generateUuid } : {}),
+  });
+
   return Object.freeze({
     auth: new AuthService({
       users: deps.repositories.users.users,
@@ -666,6 +701,8 @@ function resolveMswServices(deps: MswCompositionDependencies): AppServicesRegist
       ...(deps.now !== undefined ? { now: deps.now } : {}),
       ...(deps.generateUuid !== undefined ? { generateUuid: deps.generateUuid } : {}),
     }),
+    analytics: analyticsService,
+    reports: reportService,
     authorization: new AuthorizationManagementService({
       permissionGrants: deps.repositories.authorization.permissionGrants,
       explicitDenyRules: deps.repositories.authorization.explicitDenyRules,
@@ -4316,5 +4353,12 @@ export function createMswHandlers(deps: MswCompositionDependencies): readonly Ht
         return buildSuccessResponse(result, correlationId, now, 200);
       }),
     ),
+
+    ...createAnalyticsAndReportsMswHandlers({
+      services,
+      withSimulatedEndpoint: (handler) => withSimulatedEndpoint(deps, handler),
+      requireActorUserId,
+      buildSuccessResponse,
+    }),
   ];
 }

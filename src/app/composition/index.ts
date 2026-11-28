@@ -1,4 +1,9 @@
 export {
+  DexieAnalyticsPortsAdapter,
+  createAnalyticsPortsAdapter,
+  type AnalyticsPortsAdapterOptions,
+} from './analytics-ports-adapter';
+export {
   createAppContainer,
   type AppCompositionContainer,
   type AppServicesRegistry,

@@ -20,6 +20,16 @@ export {
   type DashboardScope,
   type DashboardWidgetConfig,
 } from './domain/analytics';
+export {
+  DEFAULT_ANALYTICS_WORKLOAD_WEIGHTS,
+  calculateAnalyticsWorkloadScore,
+  classifyAnalyticsWorkloadScore,
+  type AnalyticsWorkloadCalculationOptions,
+  type AnalyticsWorkloadScoreResult,
+  type AnalyticsWorkloadSubtaskInput,
+  type AnalyticsWorkloadTaskInput,
+  type AnalyticsWorkloadWeights,
+} from './domain/analytics-workload';
 export type { DashboardPreferenceRepositoryPort } from './application/ports/analytics-repository.port';
 export type {
   AnalyticsActorProfileSnapshot,
@@ -35,3 +45,37 @@ export type {
   AnalyticsWorkContextPort,
   AnalyticsWorkTaskSnapshot,
 } from './application/ports/analytics-context.port';
+export type {
+  AnalyticsAuditRecordInput,
+  AnalyticsBottleneckAlertSnapshot,
+  AnalyticsCalibratableWeightsSnapshot,
+  AnalyticsGovernancePort,
+  AnalyticsOrganizationSettingsSnapshot,
+  AnalyticsSubtaskSnapshot,
+} from './application/ports/analytics-governance.port';
+export type {
+  AnalyticsBottleneckAlertItem,
+  AnalyticsBottlenecksSummary,
+  AnalyticsCalibrationSettingsView,
+  AnalyticsCountBucket,
+  AnalyticsFeedbackAssigneePerformance,
+  AnalyticsFeedbackSlaSummary,
+  AnalyticsFeedbackSummary,
+  AnalyticsFeedbackVersionBucket,
+  AnalyticsFlowMetricsSnapshot,
+  AnalyticsFlowSummary,
+  AnalyticsImpedimentsSummary,
+  AnalyticsMemberWorkloadItem,
+  AnalyticsOverview,
+  AnalyticsWorkloadSummary,
+  DashboardPreferenceResult,
+  GetAnalyticsOverviewInput,
+  GetDashboardPreferenceInput,
+  ResetDashboardPreferenceInput,
+  SaveDashboardPreferenceInput,
+  UpdateCalibrationSettingsInput,
+} from './application/contracts';
+export {
+  AnalyticsService,
+  type AnalyticsServiceDependencies,
+} from './application/services/analytics-service';

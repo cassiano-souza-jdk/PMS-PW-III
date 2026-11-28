@@ -59,6 +59,7 @@ import {
   isSoftDeleted,
   isUuid,
   parseIsoDateTimeMs,
+  toCsvRow,
   validateAttachmentQuota,
   type AttachmentBlobStorePort,
   type AttachmentId,
@@ -1065,14 +1066,6 @@ function isFeedbackClosedForOperationalMutations(
   cycle: FeedbackCycle,
 ): boolean {
   return feedback.status === FEEDBACK_STATUSES.CLOSED || cycle.closedAt !== undefined;
-}
-
-function escapeCsvCell(value: string | number | undefined): string {
-  const raw = value === undefined ? '' : String(value);
-  if (raw.includes('"') || raw.includes(',') || raw.includes('\n') || raw.includes('\r')) {
-    return `"${raw.replaceAll('"', '""')}"`;
-  }
-  return raw;
 }
 
 export class FeedbackService {
@@ -5809,23 +5802,23 @@ export class FeedbackService {
           now,
           policyConfig,
         );
-        return [
-          escapeCsvCell(item.feedback.id),
-          escapeCsvCell(item.feedback.title),
-          escapeCsvCell(item.feedback.moduleKey),
-          escapeCsvCell(item.feedback.categoryId),
-          escapeCsvCell(item.feedback.priority),
-          escapeCsvCell(item.feedback.status),
-          escapeCsvCell(item.feedback.authorUserId),
-          escapeCsvCell(item.feedback.assigneeId),
-          escapeCsvCell(item.cycles.length),
-          escapeCsvCell(item.feedback.createdAt),
-          escapeCsvCell(item.feedback.closedAt),
-          escapeCsvCell(item.feedback.closureReason),
-          escapeCsvCell(item.messages.length),
-          escapeCsvCell(canSeeInternal ? item.internalNotes.length : ''),
-          escapeCsvCell(item.contests.length),
-        ].join(',');
+        return toCsvRow([
+          item.feedback.id,
+          item.feedback.title,
+          item.feedback.moduleKey,
+          item.feedback.categoryId,
+          item.feedback.priority,
+          item.feedback.status,
+          item.feedback.authorUserId,
+          item.feedback.assigneeId,
+          item.cycles.length,
+          item.feedback.createdAt,
+          item.feedback.closedAt,
+          item.feedback.closureReason,
+          item.messages.length,
+          canSeeInternal ? item.internalNotes.length : '',
+          item.contests.length,
+        ]);
       });
 
       content = [header, ...rows].join('\n');
