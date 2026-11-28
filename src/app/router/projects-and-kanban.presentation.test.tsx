@@ -130,6 +130,16 @@ describe('Projects, Participants & Kanban Presentation + Routing + Accessibility
         });
         expect(feedbackNavLink).toHaveAttribute('href', '/feedback');
         expect(feedbackNavLink).toHaveClass('min-h-[44px]');
+        const analyticsNavLink = within(primaryNav).getByRole('link', {
+          name: ptBRMessages['nav.analytics'],
+        });
+        expect(analyticsNavLink).toHaveAttribute('href', '/analytics');
+        expect(analyticsNavLink).toHaveClass('min-h-[44px]');
+        const reportsNavLink = within(primaryNav).getByRole('link', {
+          name: ptBRMessages['nav.reports'],
+        });
+        expect(reportsNavLink).toHaveAttribute('href', '/reports');
+        expect(reportsNavLink).toHaveClass('min-h-[44px]');
 
         // 1. Navega para /projects
         await user.click(
@@ -140,6 +150,9 @@ describe('Projects, Participants & Kanban Presentation + Routing + Accessibility
           name: ptBRMessages['projects.title'],
         });
         await screen.findByText('Lancamento Plataforma PMS v1');
+        expect(
+          screen.getAllByRole('link', { name: ptBRMessages['projects.openAnalyticsAction'] })[0],
+        ).toHaveAttribute('href', expect.stringMatching(/^\/projects\/.+\/analytics$/));
         expect(await axe(container)).toHaveNoViolations();
 
         // 2. Validação inline em criação de projeto (nome curto)
@@ -195,6 +208,9 @@ describe('Projects, Participants & Kanban Presentation + Routing + Accessibility
           level: 1,
           name: 'Quadro Kanban — Lancamento Plataforma PMS v1',
         });
+        expect(
+          screen.getByRole('link', { name: ptBRMessages['kanban.openAnalyticsAction'] }),
+        ).toHaveAttribute('href', expect.stringMatching(/^\/projects\/.+\/analytics$/));
         expect(await axe(container)).toHaveNoViolations();
 
         // 6. Cria coluna operacional com WIP = 1
@@ -923,6 +939,16 @@ describe('Projects, Participants & Kanban Presentation + Routing + Accessibility
       });
       expect(memberFeedbackNavLink).toHaveAttribute('href', '/feedback');
       expect(memberFeedbackNavLink).toHaveClass('min-h-[44px]');
+      const memberAnalyticsNavLink = within(primaryNav).getByRole('link', {
+        name: ptBRMessages['nav.analytics'],
+      });
+      expect(memberAnalyticsNavLink).toHaveAttribute('href', '/analytics');
+      expect(memberAnalyticsNavLink).toHaveClass('min-h-[44px]');
+      const memberReportsNavLink = await within(primaryNav).findByRole('link', {
+        name: ptBRMessages['nav.reports'],
+      });
+      expect(memberReportsNavLink).toHaveAttribute('href', '/reports');
+      expect(memberReportsNavLink).toHaveClass('min-h-[44px]');
 
       await user.click(
         within(primaryNav).getByRole('link', { name: ptBRMessages['nav.projects'] }),

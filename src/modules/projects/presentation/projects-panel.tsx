@@ -4,6 +4,7 @@ import {
   IconArchive,
   IconArchiveOff,
   IconArrowsExchange,
+  IconChartBar,
   IconCheck,
   IconDownload,
   IconFolderPlus,
@@ -129,6 +130,8 @@ export interface ProjectsPanelProps {
   readonly canOpenBoardByProjectId: Readonly<Record<string, boolean>>;
   readonly canOpenSelectedProjectBottlenecks?: boolean;
   readonly canOpenBottlenecksByProjectId?: Readonly<Record<string, boolean>>;
+  readonly canOpenSelectedProjectAnalytics?: boolean;
+  readonly canOpenAnalyticsByProjectId?: Readonly<Record<string, boolean>>;
   readonly feedback?: ProjectPanelFeedback | null;
   readonly onToggleIncludeArchived: (next: boolean) => void;
   readonly onSelectProject: (projectId: ProjectId) => void;
@@ -173,6 +176,7 @@ interface SelectedProjectDetailsViewProps {
   readonly canManageSelectedProjectMembers: boolean;
   readonly canOpenSelectedProjectBoard: boolean;
   readonly canOpenSelectedProjectBottlenecks: boolean;
+  readonly canOpenSelectedProjectAnalytics: boolean;
   readonly isMutatingProject: boolean;
   readonly onOpenBoard: (projectId: ProjectId) => void;
   readonly onUpdateProject: (projectId: ProjectId, input: UpdateProjectInput) => Promise<void>;
@@ -215,6 +219,7 @@ function SelectedProjectDetailsView({
   canManageSelectedProjectMembers,
   canOpenSelectedProjectBoard,
   canOpenSelectedProjectBottlenecks,
+  canOpenSelectedProjectAnalytics,
   isMutatingProject,
   onOpenBoard,
   onUpdateProject,
@@ -378,6 +383,15 @@ function SelectedProjectDetailsView({
                 <Link to={`/projects/${project.id}/bottlenecks`}>
                   <IconAlertTriangle className="h-4 w-4" aria-hidden="true" />
                   <span>{intl.formatMessage({ id: 'projects.openBottlenecksAction' })}</span>
+                </Link>
+              </Button>
+            ) : null}
+
+            {canOpenSelectedProjectAnalytics ? (
+              <Button asChild variant="outline" className="min-h-[44px]">
+                <Link to={`/projects/${project.id}/analytics`}>
+                  <IconChartBar className="h-4 w-4" aria-hidden="true" />
+                  <span>{intl.formatMessage({ id: 'projects.openAnalyticsAction' })}</span>
                 </Link>
               </Button>
             ) : null}
@@ -729,6 +743,8 @@ export function ProjectsPanel({
   canOpenBoardByProjectId,
   canOpenSelectedProjectBottlenecks = false,
   canOpenBottlenecksByProjectId = {},
+  canOpenSelectedProjectAnalytics = false,
+  canOpenAnalyticsByProjectId = {},
   feedback = null,
   onToggleIncludeArchived,
   onSelectProject,
@@ -862,6 +878,7 @@ export function ProjectsPanel({
                 const canOpenProjectBoard = canOpenBoardByProjectId[project.id] ?? false;
                 const canOpenProjectBottlenecks =
                   canOpenBottlenecksByProjectId[project.id] ?? false;
+                const canOpenProjectAnalytics = canOpenAnalyticsByProjectId[project.id] ?? false;
 
                 return (
                   <li
@@ -917,7 +934,9 @@ export function ProjectsPanel({
                         </div>
                       </button>
 
-                      {canOpenProjectBoard || canOpenProjectBottlenecks ? (
+                      {canOpenProjectBoard ||
+                      canOpenProjectBottlenecks ||
+                      canOpenProjectAnalytics ? (
                         <div className="flex flex-wrap gap-2">
                           {canOpenProjectBoard ? (
                             <Button
@@ -937,6 +956,17 @@ export function ProjectsPanel({
                                 <IconAlertTriangle className="h-4 w-4" aria-hidden="true" />
                                 <span>
                                   {intl.formatMessage({ id: 'projects.openBottlenecksAction' })}
+                                </span>
+                              </Link>
+                            </Button>
+                          ) : null}
+
+                          {canOpenProjectAnalytics ? (
+                            <Button asChild variant="outline" className="min-h-[44px] flex-1">
+                              <Link to={`/projects/${project.id}/analytics`}>
+                                <IconChartBar className="h-4 w-4" aria-hidden="true" />
+                                <span>
+                                  {intl.formatMessage({ id: 'projects.openAnalyticsAction' })}
                                 </span>
                               </Link>
                             </Button>
@@ -1126,6 +1156,7 @@ export function ProjectsPanel({
               canManageSelectedProjectMembers={canManageSelectedProjectMembers}
               canOpenSelectedProjectBoard={canOpenSelectedProjectBoard}
               canOpenSelectedProjectBottlenecks={canOpenSelectedProjectBottlenecks}
+              canOpenSelectedProjectAnalytics={canOpenSelectedProjectAnalytics}
               isMutatingProject={isMutatingProject}
               onOpenBoard={onOpenBoard}
               onUpdateProject={onUpdateProject}

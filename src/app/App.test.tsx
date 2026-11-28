@@ -58,6 +58,12 @@ describe('App foundation shell, routing, theme and accessibility', () => {
     expect(
       within(primaryNav).queryByRole('link', { name: ptBRMessages['nav.feedback'] }),
     ).not.toBeInTheDocument();
+    expect(
+      within(primaryNav).queryByRole('link', { name: ptBRMessages['nav.analytics'] }),
+    ).not.toBeInTheDocument();
+    expect(
+      within(primaryNav).queryByRole('link', { name: ptBRMessages['nav.reports'] }),
+    ).not.toBeInTheDocument();
     const main = screen.getByRole('main');
     expect(main).toHaveAttribute('id', 'main-content');
     const footer = screen.getByRole('contentinfo');

@@ -9,13 +9,157 @@ import type {
   TaskStatus,
   UserId,
 } from '@/shared/kernel';
-import type {
-  AnalyticsPeriodPreset,
-  DashboardPreference,
-  DashboardScope,
-  DashboardWidgetConfig,
+import {
+  DASHBOARD_SCOPES,
+  type AnalyticsPeriodPreset,
+  type DashboardPreference,
+  type DashboardScope,
+  type DashboardWidgetConfig,
 } from '../domain/analytics';
 import type { AnalyticsCalibratableWeightsSnapshot } from './ports/analytics-governance.port';
+
+export const ANALYTICS_WIDGET_KEYS = {
+  FLOW_KPIS: 'flow-kpis',
+  TASK_STATUS_BREAKDOWN: 'task-status-breakdown',
+  MY_WORKLOAD: 'my-workload',
+  TEAM_WORKLOAD: 'team-workload',
+  IMPEDIMENTS_SUMMARY: 'impediments-summary',
+  BOTTLENECKS_ALERTS: 'bottlenecks-alerts',
+  FEEDBACK_SUMMARY: 'feedback-summary',
+} as const;
+
+export type AnalyticsWidgetKey = (typeof ANALYTICS_WIDGET_KEYS)[keyof typeof ANALYTICS_WIDGET_KEYS];
+
+const ANALYTICS_WIDGET_KEY_SET: ReadonlySet<string> = new Set(Object.values(ANALYTICS_WIDGET_KEYS));
+
+export function isAnalyticsWidgetKey(value: unknown): value is AnalyticsWidgetKey {
+  return typeof value === 'string' && ANALYTICS_WIDGET_KEY_SET.has(value);
+}
+
+export interface AnalyticsWidgetDefinition {
+  readonly widgetKey: AnalyticsWidgetKey;
+  readonly allowedScopes: readonly DashboardScope[];
+  readonly supportsChart: boolean;
+  readonly requiresThirdPartyPolicyNotice: boolean;
+}
+
+export const ANALYTICS_WIDGET_CATALOG: Readonly<
+  Record<AnalyticsWidgetKey, AnalyticsWidgetDefinition>
+> = Object.freeze({
+  [ANALYTICS_WIDGET_KEYS.FLOW_KPIS]: Object.freeze({
+    widgetKey: ANALYTICS_WIDGET_KEYS.FLOW_KPIS,
+    allowedScopes: Object.freeze([
+      DASHBOARD_SCOPES.PERSONAL,
+      DASHBOARD_SCOPES.PROJECT,
+      DASHBOARD_SCOPES.ORGANIZATION,
+    ]),
+    supportsChart: true,
+    requiresThirdPartyPolicyNotice: false,
+  }),
+  [ANALYTICS_WIDGET_KEYS.TASK_STATUS_BREAKDOWN]: Object.freeze({
+    widgetKey: ANALYTICS_WIDGET_KEYS.TASK_STATUS_BREAKDOWN,
+    allowedScopes: Object.freeze([
+      DASHBOARD_SCOPES.PERSONAL,
+      DASHBOARD_SCOPES.PROJECT,
+      DASHBOARD_SCOPES.ORGANIZATION,
+    ]),
+    supportsChart: true,
+    requiresThirdPartyPolicyNotice: false,
+  }),
+  [ANALYTICS_WIDGET_KEYS.MY_WORKLOAD]: Object.freeze({
+    widgetKey: ANALYTICS_WIDGET_KEYS.MY_WORKLOAD,
+    allowedScopes: Object.freeze([
+      DASHBOARD_SCOPES.PERSONAL,
+      DASHBOARD_SCOPES.PROJECT,
+      DASHBOARD_SCOPES.ORGANIZATION,
+    ]),
+    supportsChart: false,
+    requiresThirdPartyPolicyNotice: false,
+  }),
+  [ANALYTICS_WIDGET_KEYS.TEAM_WORKLOAD]: Object.freeze({
+    widgetKey: ANALYTICS_WIDGET_KEYS.TEAM_WORKLOAD,
+    allowedScopes: Object.freeze([DASHBOARD_SCOPES.PROJECT, DASHBOARD_SCOPES.ORGANIZATION]),
+    supportsChart: true,
+    requiresThirdPartyPolicyNotice: true,
+  }),
+  [ANALYTICS_WIDGET_KEYS.IMPEDIMENTS_SUMMARY]: Object.freeze({
+    widgetKey: ANALYTICS_WIDGET_KEYS.IMPEDIMENTS_SUMMARY,
+    allowedScopes: Object.freeze([
+      DASHBOARD_SCOPES.PERSONAL,
+      DASHBOARD_SCOPES.PROJECT,
+      DASHBOARD_SCOPES.ORGANIZATION,
+    ]),
+    supportsChart: true,
+    requiresThirdPartyPolicyNotice: false,
+  }),
+  [ANALYTICS_WIDGET_KEYS.BOTTLENECKS_ALERTS]: Object.freeze({
+    widgetKey: ANALYTICS_WIDGET_KEYS.BOTTLENECKS_ALERTS,
+    allowedScopes: Object.freeze([
+      DASHBOARD_SCOPES.PERSONAL,
+      DASHBOARD_SCOPES.PROJECT,
+      DASHBOARD_SCOPES.ORGANIZATION,
+    ]),
+    supportsChart: true,
+    requiresThirdPartyPolicyNotice: true,
+  }),
+  [ANALYTICS_WIDGET_KEYS.FEEDBACK_SUMMARY]: Object.freeze({
+    widgetKey: ANALYTICS_WIDGET_KEYS.FEEDBACK_SUMMARY,
+    allowedScopes: Object.freeze([
+      DASHBOARD_SCOPES.PERSONAL,
+      DASHBOARD_SCOPES.PROJECT,
+      DASHBOARD_SCOPES.ORGANIZATION,
+    ]),
+    supportsChart: true,
+    requiresThirdPartyPolicyNotice: true,
+  }),
+});
+
+export const ANALYTICS_TABS = {
+  OVERVIEW: 'OVERVIEW',
+  FLOW: 'FLOW',
+  FEEDBACK: 'FEEDBACK',
+  WORKLOAD_BOTTLENECKS: 'WORKLOAD_BOTTLENECKS',
+  CALIBRATION: 'CALIBRATION',
+} as const;
+
+export type AnalyticsTabKey = (typeof ANALYTICS_TABS)[keyof typeof ANALYTICS_TABS];
+
+export interface AnalyticsPanelFeedback {
+  readonly type: 'success' | 'destructive';
+  readonly message: string;
+}
+
+export interface AnalyticsProjectOption {
+  readonly id: ProjectId;
+  readonly name: string;
+  readonly isArchived: boolean;
+}
+
+export interface AnalyticsChartDataRow {
+  readonly key: string;
+  readonly label: string;
+  readonly value: number;
+  readonly formattedValue?: string;
+}
+
+export interface AnalyticsDashboardDraftState {
+  readonly widgets: readonly DashboardWidgetConfig[];
+  readonly isEditing: boolean;
+  readonly isDirty: boolean;
+  readonly isDefault: boolean;
+  readonly isSaving: boolean;
+}
+
+export interface AnalyticsCalibrationDraft extends AnalyticsCalibratableWeightsSnapshot {
+  readonly justification?: string;
+}
+
+export interface AnalyticsCalibrationWeightGroupSums {
+  readonly workloadSum: number;
+  readonly focusSum: number;
+  readonly isWorkloadSumValid: boolean;
+  readonly isFocusSumValid: boolean;
+}
 
 export interface GetAnalyticsOverviewInput {
   readonly scope: DashboardScope;
