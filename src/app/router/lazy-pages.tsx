@@ -22,6 +22,8 @@ const BottlenecksPage = lazy(() => import('./pages/bottlenecks-page'));
 const FeedbackPage = lazy(() => import('./pages/feedback-page'));
 const FeedbackDetailPage = lazy(() => import('./pages/feedback-detail-page'));
 const FeedbackGovernancePage = lazy(() => import('./pages/feedback-governance-page'));
+const AnalyticsPage = lazy(() => import('./pages/analytics-page'));
+const ReportsPage = lazy(() => import('./pages/reports-page'));
 const PermissionsPage = lazy(() => import('./pages/permissions-page'));
 
 export function LazyFoundationHomePage() {
@@ -188,6 +190,22 @@ export function LazyFeedbackGovernancePage() {
   return (
     <RouteSuspense>
       <FeedbackGovernancePage />
+    </RouteSuspense>
+  );
+}
+
+export function LazyAnalyticsPage() {
+  return (
+    <RouteSuspense>
+      <AnalyticsPage />
+    </RouteSuspense>
+  );
+}
+
+export function LazyReportsPage() {
+  return (
+    <RouteSuspense>
+      <ReportsPage />
     </RouteSuspense>
   );
 }

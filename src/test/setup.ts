@@ -51,3 +51,17 @@ if (typeof window !== 'undefined' && typeof window.matchMedia !== 'function') {
     }),
   });
 }
+
+if (typeof window !== 'undefined' && typeof globalThis.ResizeObserver !== 'function') {
+  class JsdomResizeObserver implements ResizeObserver {
+    observe(): void {}
+    unobserve(): void {}
+    disconnect(): void {}
+  }
+
+  Object.defineProperty(globalThis, 'ResizeObserver', {
+    writable: true,
+    configurable: true,
+    value: JsdomResizeObserver,
+  });
+}
