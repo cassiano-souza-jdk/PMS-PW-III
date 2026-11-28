@@ -1,3 +1,4 @@
+import Dexie from 'dexie';
 import { ConflictError } from '@/shared/errors';
 import {
   TRANSACTION_RESOURCES,
@@ -263,6 +264,24 @@ export class DexieFeedbackCategoryRepository implements FeedbackCategoryReposito
 
       return records.sort((a, b) => a.versionNumber - b.versionNumber);
     });
+  }
+
+  async listAllVersionsByOrganization(
+    organizationId: OrganizationId,
+  ): Promise<readonly FeedbackCategoryVersion[]> {
+    return withPersistenceErrorHandling(
+      'FeedbackCategory.listAllVersionsByOrganization',
+      async () => {
+        const records = await this.versionTable
+          .where('[organizationId+categoryId]')
+          .between([organizationId, Dexie.minKey], [organizationId, Dexie.maxKey], true, true)
+          .toArray();
+
+        return records.sort(
+          (a, b) => a.categoryId.localeCompare(b.categoryId) || a.versionNumber - b.versionNumber,
+        );
+      },
+    );
   }
 
   async saveCategory(category: FeedbackCategory): Promise<void> {
@@ -561,6 +580,23 @@ export class DexieFeedbackContestRepository implements FeedbackContestRepository
     });
   }
 
+  async listDecisionsByOrganization(
+    organizationId: OrganizationId,
+  ): Promise<readonly FeedbackContestDecision[]> {
+    return withPersistenceErrorHandling('FeedbackContest.listDecisionsByOrganization', async () => {
+      const records = await this.decisionTable
+        .where('organizationId')
+        .equals(organizationId)
+        .toArray();
+
+      return records.sort(
+        (a, b) =>
+          parseIsoDateTimeMs(a.decidedAt) - parseIsoDateTimeMs(b.decidedAt) ||
+          a.id.localeCompare(b.id),
+      );
+    });
+  }
+
   async saveContest(contest: FeedbackContest): Promise<void> {
     await saveOrganizationScopedEntity(this.contestTable, contest, 'FeedbackContest');
   }
@@ -662,6 +698,24 @@ export class DexieFeedbackContestReasonRepository implements FeedbackContestReas
 
       return records.sort((a, b) => a.versionNumber - b.versionNumber);
     });
+  }
+
+  async listAllVersionsByOrganization(
+    organizationId: OrganizationId,
+  ): Promise<readonly FeedbackContestReasonVersion[]> {
+    return withPersistenceErrorHandling(
+      'FeedbackContestReason.listAllVersionsByOrganization',
+      async () => {
+        const records = await this.versionTable
+          .where('[organizationId+reasonId]')
+          .between([organizationId, Dexie.minKey], [organizationId, Dexie.maxKey], true, true)
+          .toArray();
+
+        return records.sort(
+          (a, b) => a.reasonId.localeCompare(b.reasonId) || a.versionNumber - b.versionNumber,
+        );
+      },
+    );
   }
 
   async saveReason(reason: FeedbackContestReason): Promise<void> {

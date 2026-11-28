@@ -507,6 +507,118 @@ describe(
       );
     });
 
+    it('blocks acyclic DAG violations in analytics and reports and adds reports to Phase 08/09 bans (ADR-0014 §4)', async () => {
+      const analyticsViolations = await lintSnippet(
+        [
+          "import { SUBTASK_STATUSES } from '@/modules/tasks';",
+          "import { PROJECT_STATUSES } from '@/modules/projects';",
+          "import { BOARD_COLUMN_ROLES } from '@/modules/kanban';",
+          "import { IMPEDIMENT_CATEGORIES } from '@/modules/impediments';",
+          "import { FOCUS_MODES } from '@/modules/focus';",
+          "import { BOTTLENECK_INDICATORS } from '@/modules/bottlenecks';",
+          "import { FEEDBACK_STATUSES } from '@/modules/feedback';",
+          "import { TeamService } from '@/modules/teams';",
+          "import { normalizeEmail } from '@/modules/users';",
+          "import { REPORT_KINDS } from '@/modules/reports';",
+          'export const forbiddenAnalyticsImports = [',
+          '  SUBTASK_STATUSES,',
+          '  PROJECT_STATUSES,',
+          '  BOARD_COLUMN_ROLES,',
+          '  IMPEDIMENT_CATEGORIES,',
+          '  FOCUS_MODES,',
+          '  BOTTLENECK_INDICATORS,',
+          '  FEEDBACK_STATUSES,',
+          '  TeamService,',
+          '  normalizeEmail,',
+          '  REPORT_KINDS,',
+          '];',
+        ].join('\n'),
+        'src/modules/analytics/application/violation-dag.ts',
+      );
+      const analyticsReportsViolation = await lintSnippet(
+        [
+          "import { REPORT_KINDS } from '@/modules/reports';",
+          'export const forbiddenAnalyticsReportsImport = REPORT_KINDS;',
+        ].join('\n'),
+        'src/modules/analytics/infrastructure/violation-dag-reports.ts',
+      );
+      const reportsViolations = await lintSnippet(
+        [
+          "import { FEEDBACK_STATUSES } from '@/modules/feedback';",
+          "import { SUBTASK_STATUSES } from '@/modules/tasks';",
+          "import { PROJECT_STATUSES } from '@/modules/projects';",
+          "import { BOTTLENECK_INDICATORS } from '@/modules/bottlenecks';",
+          "import { DEMO_SEED_VERSION } from '@/modules/demo';",
+          'export const forbiddenReportsImports = [',
+          '  FEEDBACK_STATUSES,',
+          '  SUBTASK_STATUSES,',
+          '  PROJECT_STATUSES,',
+          '  BOTTLENECK_INDICATORS,',
+          '  DEMO_SEED_VERSION,',
+          '];',
+        ].join('\n'),
+        'src/modules/reports/application/violation-dag.ts',
+      );
+      const reportsBannedFrom = await Promise.all(
+        ['bottlenecks', 'focus', 'feedback', 'tasks', 'projects'].map((sourceModule) =>
+          lintSnippet(
+            [
+              "import { REPORT_KINDS } from '@/modules/reports';",
+              'export const forbiddenReportsImport = REPORT_KINDS;',
+            ].join('\n'),
+            `src/modules/${sourceModule}/application/violation-dag-reports.ts`,
+          ),
+        ),
+      );
+
+      expect(
+        analyticsViolations.filter(
+          (msg) => msg.ruleId === 'boundaries/dependencies' && msg.severity === 2,
+        ),
+      ).toHaveLength(10);
+      expect(
+        analyticsReportsViolation.filter(
+          (msg) => msg.ruleId === 'boundaries/dependencies' && msg.severity === 2,
+        ),
+      ).toHaveLength(1);
+      expect(
+        reportsViolations.filter(
+          (msg) => msg.ruleId === 'boundaries/dependencies' && msg.severity === 2,
+        ),
+      ).toHaveLength(5);
+      for (const messages of reportsBannedFrom) {
+        expect(
+          messages.filter((msg) => msg.ruleId === 'boundaries/dependencies' && msg.severity === 2),
+        ).toHaveLength(1);
+      }
+    });
+
+    it('allows legitimate reports -> analytics/authorization and analytics -> authorization DAG dependencies (ADR-0014 §4)', async () => {
+      const validReportsAppMessages = await lintSnippet(
+        [
+          "import { ANALYTICS_PERIOD_PRESETS, calculateThroughput } from '@/modules/analytics';",
+          "import { PERMISSION_CODES } from '@/modules/authorization';",
+          'export const validReportsImports = [ANALYTICS_PERIOD_PRESETS, calculateThroughput, PERMISSION_CODES];',
+        ].join('\n'),
+        'src/modules/reports/application/valid-dag.ts',
+      );
+      const validAnalyticsAppMessages = await lintSnippet(
+        [
+          "import { PERMISSION_CODES } from '@/modules/authorization';",
+          "import { sanitizeSpreadsheetCell } from '@/shared/kernel';",
+          'export const validAnalyticsImports = [PERMISSION_CODES, sanitizeSpreadsheetCell];',
+        ].join('\n'),
+        'src/modules/analytics/application/valid-dag.ts',
+      );
+      const [reportCatalogTestResult] = await eslint.lintFiles([
+        path.resolve(WORKSPACE_ROOT, 'src/modules/reports/domain/report-catalog.test.ts'),
+      ]);
+
+      expect(validReportsAppMessages.filter((msg) => msg.severity === 2)).toEqual([]);
+      expect(validAnalyticsAppMessages.filter((msg) => msg.severity === 2)).toEqual([]);
+      expect(reportCatalogTestResult?.messages.filter((msg) => msg.severity === 2)).toEqual([]);
+    });
+
     it('blocks circular dependencies between real files (import-x/no-cycle)', async () => {
       const [result] = await eslint.lintFiles([path.join(TMP_ALPHA_DIR, 'domain', 'cycle-a.ts')]);
       if (!result) {

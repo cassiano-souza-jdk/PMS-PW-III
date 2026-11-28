@@ -73,6 +73,10 @@ export interface FeedbackCategoryRepositoryPort {
     organizationId: OrganizationId,
     categoryId: FeedbackCategoryId,
   ): Promise<readonly FeedbackCategoryVersion[]>;
+  /** All historical category versions of the organization (ADR-0014 §5) via range scan on the `v2` index. */
+  listAllVersionsByOrganization(
+    organizationId: OrganizationId,
+  ): Promise<readonly FeedbackCategoryVersion[]>;
   saveCategory(category: FeedbackCategory): Promise<void>;
   saveVersion(version: FeedbackCategoryVersion): Promise<void>;
 }
@@ -130,6 +134,10 @@ export interface FeedbackContestRepositoryPort {
     organizationId: OrganizationId,
     contestId: FeedbackContestId,
   ): Promise<readonly FeedbackContestDecision[]>;
+  /** All contest decisions of the organization for historical Analytics (ADR-0014 §5). */
+  listDecisionsByOrganization(
+    organizationId: OrganizationId,
+  ): Promise<readonly FeedbackContestDecision[]>;
   saveContest(contest: FeedbackContest): Promise<void>;
   appendAnalysis(analysis: FeedbackContestAnalysis): Promise<void>;
   appendDecision(decision: FeedbackContestDecision): Promise<void>;
@@ -152,6 +160,10 @@ export interface FeedbackContestReasonRepositoryPort {
   listVersions(
     organizationId: OrganizationId,
     reasonId: FeedbackContestReasonId,
+  ): Promise<readonly FeedbackContestReasonVersion[]>;
+  /** All historical contest reason versions of the organization (ADR-0014 §5) via range scan on the `v2` index. */
+  listAllVersionsByOrganization(
+    organizationId: OrganizationId,
   ): Promise<readonly FeedbackContestReasonVersion[]>;
   saveReason(reason: FeedbackContestReason): Promise<void>;
   saveVersion(version: FeedbackContestReasonVersion): Promise<void>;

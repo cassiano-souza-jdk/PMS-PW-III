@@ -21,3 +21,17 @@ export {
   type DashboardWidgetConfig,
 } from './domain/analytics';
 export type { DashboardPreferenceRepositoryPort } from './application/ports/analytics-repository.port';
+export type {
+  AnalyticsActorProfileSnapshot,
+  AnalyticsCatalogVersionSnapshot,
+  AnalyticsExecutionCycleSnapshot,
+  AnalyticsFeedbackContestDecisionSnapshot,
+  AnalyticsFeedbackContestSnapshot,
+  AnalyticsFeedbackCycleSnapshot,
+  AnalyticsFeedbackSnapshot,
+  AnalyticsImpedimentSnapshot,
+  AnalyticsProjectSnapshot,
+  AnalyticsTaskPauseSnapshot,
+  AnalyticsWorkContextPort,
+  AnalyticsWorkTaskSnapshot,
+} from './application/ports/analytics-context.port';

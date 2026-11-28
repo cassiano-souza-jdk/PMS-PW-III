@@ -270,6 +270,18 @@ export class DexieTaskPauseRepository implements TaskPauseRepositoryPort {
     });
   }
 
+  async listByOrganization(organizationId: OrganizationId): Promise<readonly TaskPause[]> {
+    return withPersistenceErrorHandling('TaskPause.listByOrganization', async () => {
+      const records = await this.table.where('organizationId').equals(organizationId).toArray();
+
+      return records.sort(
+        (a, b) =>
+          parseIsoDateTimeMs(a.startedAt) - parseIsoDateTimeMs(b.startedAt) ||
+          a.id.localeCompare(b.id),
+      );
+    });
+  }
+
   async save(pause: TaskPause): Promise<void> {
     await saveOrganizationScopedEntity(this.table, pause, 'TaskPause');
   }
@@ -299,6 +311,18 @@ export class DexieTaskExecutionCycleRepository implements TaskExecutionCycleRepo
         .toArray();
 
       return records.sort((a, b) => a.cycleNumber - b.cycleNumber);
+    });
+  }
+
+  async listByOrganization(organizationId: OrganizationId): Promise<readonly TaskExecutionCycle[]> {
+    return withPersistenceErrorHandling('TaskExecutionCycle.listByOrganization', async () => {
+      const records = await this.table.where('organizationId').equals(organizationId).toArray();
+
+      return records.sort(
+        (a, b) =>
+          parseIsoDateTimeMs(a.startedAt) - parseIsoDateTimeMs(b.startedAt) ||
+          a.cycleNumber - b.cycleNumber,
+      );
     });
   }
 

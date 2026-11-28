@@ -139,3 +139,13 @@ export {
 } from './attachments';
 
 export type { ProjectBottleneckThresholds } from './bottlenecks';
+
+export {
+  SPREADSHEET_FORMULA_TRIGGER_CHARACTERS,
+  escapeCsvCell,
+  isSpreadsheetFormulaLike,
+  sanitizeSpreadsheetCell,
+  toCsvCell,
+  toCsvRow,
+  type SpreadsheetCellValue,
+} from './spreadsheet-sanitization';

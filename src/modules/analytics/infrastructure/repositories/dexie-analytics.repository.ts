@@ -5,6 +5,8 @@ import {
   type UserId,
 } from '@/shared/kernel';
 import {
+  deleteOrganizationScopedById,
+  findOrganizationScopedById,
   saveOrganizationScopedEntity,
   withPersistenceErrorHandling,
   type PmsDatabase,
@@ -26,6 +28,18 @@ export class DexieDashboardPreferenceRepository implements DashboardPreferenceRe
   private get table() {
     return this.db.getTable<DashboardPreference, DashboardPreferenceId>(
       TRANSACTION_RESOURCES.DASHBOARD_PREFERENCES,
+    );
+  }
+
+  async findById(
+    organizationId: OrganizationId,
+    preferenceId: DashboardPreferenceId,
+  ): Promise<DashboardPreference | null> {
+    return findOrganizationScopedById(
+      this.table,
+      organizationId,
+      preferenceId,
+      'DashboardPreference',
     );
   }
 
@@ -55,7 +69,33 @@ export class DexieDashboardPreferenceRepository implements DashboardPreferenceRe
     });
   }
 
-  async save(preference: DashboardPreference): Promise<void> {
-    await saveOrganizationScopedEntity(this.table, preference, 'DashboardPreference');
+  /**
+   * Logical uniqueness per `(organizationId, userId, scope, projectId)` over the preserved `v2` schema
+   * (ADR-0014 §5): reuses `existing.id` when a preference already exists for the same key.
+   */
+  async save(preference: DashboardPreference): Promise<DashboardPreference> {
+    const existing = await this.findByUserAndScope(
+      preference.organizationId,
+      preference.userId,
+      preference.scope,
+      preference.projectId,
+    );
+
+    const toPersist: DashboardPreference =
+      existing !== null && existing.id !== preference.id
+        ? { ...preference, id: existing.id }
+        : preference;
+
+    await saveOrganizationScopedEntity(this.table, toPersist, 'DashboardPreference');
+    return toPersist;
+  }
+
+  async delete(organizationId: OrganizationId, preferenceId: DashboardPreferenceId): Promise<void> {
+    await deleteOrganizationScopedById(
+      this.table,
+      organizationId,
+      preferenceId,
+      'DashboardPreference',
+    );
   }
 }
